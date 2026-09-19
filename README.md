@@ -1,4 +1,4 @@
-# BABY-C2
+# opss-terconnect
 
 ## Warning!!! Used for authorised testing and learning only!!
 
