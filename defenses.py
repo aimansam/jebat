@@ -72,7 +72,7 @@ _SUSPICIOUS_PROCS = {
 }
 
 
-def _get_process_names() -> set[str]:
+def _get_process_names() -> set:
     """Get names of all running processes (Windows-only)."""
     try:
         import win32process  # optional, falls back below
@@ -140,6 +140,17 @@ def is_vm_detected() -> bool:
     return False
 
 
+def check_debugger_now() -> bool:
+    """
+    Quick check: is a debugger attached RIGHT NOW.
+
+    Call this before sensitive operations (like token decode) to catch
+    a debugger that was attached after startup. Returns True if a
+    debugger is present.
+    """
+    return is_debugger_present() or check_remote_debugger()
+
+
 def run_defenses() -> None:
     """
     Run all anti-analysis checks.
@@ -185,7 +196,10 @@ def secure_wipe(buf: ctypes.c_char_p, length: int) -> None:
         pass
 
 
-def secure_wipe_bytes(data: bytearray) -> None:
-    """Best-effort wipe of a bytearray by overwriting with zeros."""
+def secure_wipe_bytes(data) -> None:
+    """Best-effort wipe of a bytearray or list of ints by overwriting with zeros."""
     for i in range(len(data)):
-        data[i] = 0
+        if isinstance(data, bytearray):
+            data[i] = 0
+        else:
+            data[i] = 0

