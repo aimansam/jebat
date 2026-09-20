@@ -118,6 +118,40 @@ Easy path — use the Discord commands:
 
 Or just delete the `.exe` file. If persistence was installed, also remove it manually: delete the `WindowsSecurityCheck` scheduled task in Task Scheduler.
 
+### Check and clean persistence (copy-paste)
+
+Run this in PowerShell as the user who ran the binary. It checks for the scheduled task and registry entry, reports what it finds, and removes both if present:
+
+```powershell
+$taskName = "WindowsSecurityCheck"
+
+# Check scheduled task
+$task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+if ($task) {
+    Write-Host "[FOUND] Scheduled task: $taskName" -ForegroundColor Yellow
+    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+    Write-Host "[REMOVED] Scheduled task: $taskName" -ForegroundColor Green
+} else {
+    Write-Host "[CLEAN] No scheduled task: $taskName" -ForegroundColor Gray
+}
+
+# Check registry run key
+$regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+$regName = $taskName
+try {
+    $val = Get-ItemProperty -Path $regPath -Name $regName -ErrorAction Stop
+    Write-Host "[FOUND] Registry: $regPath\$regName = $val.$regName" -ForegroundColor Yellow
+    Remove-ItemProperty -Path $regPath -Name $regName -ErrorAction SilentlyContinue
+    Write-Host "[REMOVED] Registry: $regPath\$regName" -ForegroundColor Green
+} catch {
+    Write-Host "[CLEAN] No registry entry: $regPath\$regName" -ForegroundColor Gray
+}
+
+Write-Host "`nDone. If the binary is still on disk, delete it manually." -ForegroundColor White
+```
+
+If the binary was run as administrator and the scheduled task was created for SYSTEM, run this in an **elevated** PowerShell (Run as administrator) to catch the SYSTEM-owned task.
+
 ## Repository structure
 
 ```
