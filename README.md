@@ -71,7 +71,7 @@ To stop: end the process in Task Manager.
 - **XOR-obfuscated credentials** — token, channel ID, admin ID as XOR byte arrays. No plaintext in source or binary. Defends against `strings` and static disassembly.
 - **Anti-debug** — `IsDebuggerPresent` + `CheckRemoteDebuggerPresent` at startup. Silent exit if attached.
 - **Anti-tool scan** — process list checked for ProcmDump, Process Hacker, x64dbg, Cheat Engine, WinDbg, IDA, dnSpy, and others. Silent exit if found.
-- **Memory wiping** — decoded token held in a ctypes buffer, converted to string for the HTTP auth header, buffer then wiped. Reduces in-memory footprint.
+- **Memory wiping** — token decoded per-request into a short-lived ctypes buffer, converted to string for the HTTP auth header, buffer then wiped. The XOR source list persists as obfuscated data and is re-decoded on each call. Plaintext token lifetime is bounded to the duration of each HTTP call (~milliseconds), not the life of the process.
 
 ### Limitations
 

