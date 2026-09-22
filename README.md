@@ -1,11 +1,11 @@
 # JEBAT
-
+```
 ██ ███████ ██████   █████  ████████ 
      ██ ██      ██   ██ ██   ██    ██    
      ██ █████   ██████  ███████    ██    
 ██   ██ ██      ██   ██ ██   ██    ██    
  █████  ███████ ██████  ██   ██    ██
-
+```
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Discord bot C2 — Nuitka-compiled Windows binary for remote command execution, file download, screenshot capture, and file search from a Discord control channel. Persistent via scheduled task + registry run key. No Discord gateway — uses only Python stdlib (`urllib`) for HTTP polling.
