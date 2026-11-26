@@ -1,0 +1,15 @@
+[server]
+api_bind = "0.0.0.0:9090"
+db_path = "/app/data/jebat.db"
+log_level = "info"
+loot_dir = "/app/loot"
+
+[[listeners]]
+protocol = "https"
+bind = "0.0.0.0"
+port = 443
+beacon_path = "/beacon"
+result_path = "/result"
+tls_cert = "/app/config/cert.pem"
+tls_key = "/app/config/key.pem"
+rc4_key = "aabbccddee112233"

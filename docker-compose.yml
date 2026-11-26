@@ -1,0 +1,19 @@
+services:
+  jebat:
+    build: .
+    container_name: jebat
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+      - "443:443"
+    volumes:
+      - ./config:/app/config:ro
+      - jebat-data:/app/data
+      - jebat-loot:/app/loot
+    command: ["serve", "--config", "/app/config/jebat.docker.toml"]
+    environment:
+      - RUST_LOG=info
+
+volumes:
+  jebat-data:
+  jebat-loot:

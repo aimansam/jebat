@@ -1,0 +1,8 @@
+target/
+*.db
+loot/
+config/*.pem
+web/node_modules/
+web/dist/
+.git/
+.env
