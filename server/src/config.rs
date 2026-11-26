@@ -40,6 +40,8 @@ pub struct ListenerConfig {
     #[serde(default)]
     pub tls_key: String,
     pub rc4_key: String,
+    #[serde(default)]
+    pub domain: String,
 }
 
 fn default_beacon_path() -> String {

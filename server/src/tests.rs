@@ -402,6 +402,7 @@ mod config_tests {
             tls_cert: String::new(),
             tls_key: String::new(),
             rc4_key: "aabbccddee112233".into(),
+            domain: String::new(),
         };
         let key = cfg.rc4_key_bytes().unwrap();
         assert_eq!(key, vec![0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x11, 0x22, 0x33]);
@@ -418,6 +419,7 @@ mod config_tests {
             tls_cert: String::new(),
             tls_key: String::new(),
             rc4_key: "not_hex".into(),
+            domain: String::new(),
         };
         assert!(cfg.rc4_key_bytes().is_err());
     }

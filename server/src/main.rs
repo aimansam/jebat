@@ -63,11 +63,52 @@ async fn main() {
             for listener_cfg in &cfg.listeners {
                 let s = app_state.clone();
                 let lc = listener_cfg.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = listeners::https::start_listener(s, lc).await {
-                        eprintln!("listener error: {}", e);
+                match lc.protocol.as_str() {
+                    "https" | "http" => {
+                        tokio::spawn(async move {
+                            if let Err(e) = listeners::https::start_listener(s, lc).await {
+                                eprintln!("HTTPS listener error: {}", e);
+                            }
+                        });
                     }
-                });
+                    "dns" => {
+                        let rc4_key = lc.rc4_key_bytes().unwrap_or_else(|e| {
+                            eprintln!("DNS listener rc4_key error: {}", e);
+                            std::process::exit(1);
+                        });
+                        tokio::spawn(async move {
+                            if let Err(e) = listeners::dns::start_dns_listener(
+                                s,
+                                &lc.bind,
+                                lc.port,
+                                &lc.domain,
+                                &rc4_key,
+                            )
+                            .await
+                            {
+                                eprintln!("DNS listener error: {}", e);
+                            }
+                        });
+                    }
+                    "smb" => {
+                        let rc4_key = lc.rc4_key_bytes().unwrap_or_else(|e| {
+                            eprintln!("SMB listener rc4_key error: {}", e);
+                            std::process::exit(1);
+                        });
+                        tokio::spawn(async move {
+                            if let Err(e) = listeners::smb::start_smb_listener(
+                                s, &lc.bind, lc.port, &rc4_key,
+                            )
+                            .await
+                            {
+                                eprintln!("SMB listener error: {}", e);
+                            }
+                        });
+                    }
+                    other => {
+                        eprintln!("unknown listener protocol: {}", other);
+                    }
+                }
             }
 
             let api_router = api::build_api_router(app_state);

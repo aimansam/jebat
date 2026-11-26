@@ -2,6 +2,7 @@
 api_bind = "127.0.0.1:9090"
 db_path = "jebat.db"
 log_level = "info"
+loot_dir = "loot"
 
 [[listeners]]
 protocol = "https"
@@ -12,3 +13,16 @@ result_path = "/result"
 tls_cert = "config/cert.pem"
 tls_key = "config/key.pem"
 rc4_key = "aabbccddee112233"
+
+# [[listeners]]
+# protocol = "dns"
+# bind = "0.0.0.0"
+# port = 53
+# domain = "c2.example.com"
+# rc4_key = "aabbccddee112233"
+
+# [[listeners]]
+# protocol = "smb"
+# bind = "0.0.0.0"
+# port = 445
+# rc4_key = "aabbccddee112233"
