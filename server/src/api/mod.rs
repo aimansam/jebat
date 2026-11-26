@@ -3,6 +3,7 @@ pub mod files;
 pub mod implants;
 pub mod listeners;
 pub mod tasks;
+pub mod tunnels;
 pub mod ws;
 
 use crate::state::AppState;
@@ -22,6 +23,7 @@ pub fn build_api_router(state: AppState) -> Router {
         .merge(tasks::routes(state.clone()))
         .merge(listeners::routes(state.clone()))
         .merge(files::routes(state.clone()))
+        .merge(tunnels::routes(state.clone()))
         .merge(ws::routes(state))
         .fallback_service(ServeDir::new("web/dist"))
         .layer(cors)

@@ -88,9 +88,48 @@ impl TaskQueue {
         success: bool,
         output: &[u8],
     ) -> Result<bool, String> {
-        self.db
+        let completed = self
+            .db
             .complete_task(task_id, success, output)
-            .map_err(|e| format!("db error: {}", e))
+            .map_err(|e| format!("db error: {}", e))?;
+
+        if completed {
+            if let Ok(Some(task)) = self.db.get_task(task_id) {
+                if let Some(chain_id) = task.chain_id {
+                    let _ = self.db.advance_chain(chain_id);
+                }
+            }
+        }
+        Ok(completed)
+    }
+
+    pub fn enqueue_chain(
+        &self,
+        agent_id: &[u8; 16],
+        tasks: &[(u8, Vec<u8>)],
+    ) -> Result<(i64, Vec<i64>), String> {
+        if tasks.is_empty() {
+            return Err("empty chain".into());
+        }
+        for (tt, _) in tasks {
+            if TaskType::from_u8(*tt).is_none() {
+                return Err(format!("unknown task type: {}", tt));
+            }
+        }
+        let chain_id = self
+            .db
+            .create_chain(agent_id, tasks.len() as i64)
+            .map_err(|e| format!("db error: {}", e))?;
+
+        let mut task_ids = Vec::new();
+        for (seq, (tt, data)) in tasks.iter().enumerate() {
+            let tid = self
+                .db
+                .queue_chained_task(agent_id, *tt, data, chain_id, seq as i64)
+                .map_err(|e| format!("db error: {}", e))?;
+            task_ids.push(tid);
+        }
+        Ok((chain_id, task_ids))
     }
 
     pub fn get(&self, task_id: i64) -> Result<Option<TaskInfo>, String> {
