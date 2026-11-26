@@ -11,7 +11,7 @@ use serde_json::json;
 pub fn routes(state: AppState) -> Router {
     Router::new()
         .route("/api/builder/profiles", get(list_profiles))
-        .route("/api/builder/profiles/{name}", get(get_profile))
+        .route("/api/builder/profiles/:name", get(get_profile))
         .with_state(state)
 }
 

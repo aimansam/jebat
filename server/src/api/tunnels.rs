@@ -15,7 +15,7 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/tunnels", get(list_tunnels))
         .route("/api/tunnels/socks", post(start_socks))
         .route("/api/tunnels/portfwd", post(start_portfwd))
-        .route("/api/tunnels/{id}/close", post(close_tunnel))
+        .route("/api/tunnels/:id/close", post(close_tunnel))
         .with_state(state)
 }
 

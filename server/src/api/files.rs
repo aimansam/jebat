@@ -14,9 +14,9 @@ pub fn routes(state: AppState) -> Router {
     Router::new()
         .route("/api/loot", get(list_all_loot))
         .route("/api/loot/upload", post(upload_loot))
-        .route("/api/loot/{id}", get(get_loot))
-        .route("/api/loot/{id}/download", get(download_loot))
-        .route("/api/implants/{agent_id}/loot", get(list_implant_loot))
+        .route("/api/loot/:id", get(get_loot))
+        .route("/api/loot/:id/download", get(download_loot))
+        .route("/api/implants/:agent_id/loot", get(list_implant_loot))
         .with_state(state)
 }
 

@@ -15,8 +15,8 @@ pub fn routes(state: AppState) -> Router {
         .route("/api/tasks", post(queue_task))
         .route("/api/tasks/batch", post(batch_tasks))
         .route("/api/tasks/chain", post(chain_tasks))
-        .route("/api/tasks/{id}", get(get_task))
-        .route("/api/implants/{id}/tasks", get(list_implant_tasks))
+        .route("/api/tasks/:id", get(get_task))
+        .route("/api/implants/:id/tasks", get(list_implant_tasks))
         .route("/api/implants/bulk/sleep", post(bulk_sleep))
         .with_state(state)
 }

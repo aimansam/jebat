@@ -12,7 +12,7 @@ use serde_json::json;
 pub fn routes(state: AppState) -> Router {
     Router::new()
         .route("/api/implants", get(list_implants))
-        .route("/api/implants/{id}", get(get_implant).delete(delete_implant))
+        .route("/api/implants/:id", get(get_implant).delete(delete_implant))
         .with_state(state)
 }
 
