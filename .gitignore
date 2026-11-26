@@ -17,10 +17,3 @@ web/dist/
 
 # Environment
 .env
-
-# Python (archived)
-/build/
-/.pyarmor/
-/dist/
-*.spec
-__pycache__/

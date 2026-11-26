@@ -6,186 +6,147 @@
 ██   ██ ██      ██   ██ ██   ██    ██    
  █████  ███████ ██████  ██   ██    ██
 ```
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Discord bot C2 — Nuitka-compiled Windows binary for remote command execution, file download, screenshot capture, and file search from a Discord control channel. Persistent via scheduled task + registry run key. No Discord gateway — uses only Python stdlib (`urllib`) for HTTP polling.
+Command & Control server for [Badang](https://github.com/aiman-sam/badang) implants. Rust/axum backend with HTTPS, DNS, and SMB listeners, React web UI, and operator CLI.
 
-## Screenshots
+Part of the [Tuah](https://github.com/aiman-sam) red team toolkit — named after Malay warriors.
 
-![Connected](images/connected.png)
-![Ping](images/ping.png)
-![Exec](images/exec.png)
-![Download](images/download.png)
+## Features
 
-## Overview
-
-One binary per target machine. Each target runs its own Discord bot (HTTP API client) with its own token. The binary polls the Discord REST API for commands in a control channel; the matching target executes and sends results back via HTTP. On first run, the binary installs itself as a scheduled task (runs at user logon) and adds a registry run key — so it survives reboots.
-
-
+- **Multi-protocol listeners** — HTTPS (TLS/rustls), DNS (TXT record C2), SMB (length-prefixed TCP)
+- **Wire protocol** — Binary LE framing with RC4 encryption, matches Badang byte-for-byte
+- **Real-time web UI** — React + TypeScript dashboard with WebSocket event feed, xterm.js interactive shell
+- **Task management** — Shell, sleep, exit, file upload/download, cred dump, lateral move, exfil, SOCKS, port forward
+- **Task chaining** — Sequential multi-step execution with auto-advance
+- **Loot management** — Auto-categorized file/credential storage per implant
+- **Tunnel tracking** — SOCKS5 proxy and port forwarding state management
+- **Operator CLI** — REPL alternative to web UI with partial agent ID resolution
+- **Implant builder** — Profile-based config generation (stealth / noisy / pivot)
+- **JWT auth** — Token-based operator authentication
 
 ## Quickstart
 
 ```bash
-python token_gen.py "MT...bot-token..." "channel_id" "admin_id"
-# → paste the output into VALORANT.py
+# generate self-signed TLS certs
+openssl req -x509 -newkey rsa:4096 -keyout config/key.pem \
+  -out config/cert.pem -days 365 -nodes -subj "/CN=localhost"
 
-pip install -r requirements.txt
-python -m nuitka --onefile --windows-console-mode=disable \
-    --windows-icon-from-ico=valorant.ico \
-    --lto \
-    --python-flag=no_site \
-    --python-flag=no_user_site \
-    --assume-yes-for-downloads \
-    VALORANT.py
+# build server
+cargo build --release
+
+# build web UI
+cd web && npm install && npm run build && cd ..
+
+# run
+./target/release/jebat-server --config config/jebat.toml
 ```
 
-Then see [Build](#build) for the full hardening flags and [Deploy](#deploy) for deployment steps.
+Web UI at `https://127.0.0.1:9090` — login with `admin` / `admin`.
 
-## Build
-
-**One build per target. One token per target. Do not share binaries.**
+## Operator CLI
 
 ```bash
-# 1. Generate XOR-obfuscated config (on build machine, with real token)
-python token_gen.py "MT...bot-token..." "channel_id" "admin_id"
-# → paste the output into VALORANT.py, replacing the placeholder lists
-
-# 2. Compile
-pip install -r requirements.txt
-python -m nuitka --onefile --windows-console-mode=disable \
-    --windows-icon-from-ico=valorant.ico \
-    --lto \
-    --python-flag=no_site \
-    --python-flag=no_user_site \
-    --assume-yes-for-downloads \
-    VALORANT.py
-
-# 3. (Optional) Strip debug symbols
-#    Linux:  strip VALORANT.exe
-#    Windows: editbin /STS or similar
-
-# 4. Rename to a generic name (e.g. svchost_update.exe)
-#    Process name in Task Manager = filename. Pick something boring.
+cargo run --bin jebat-cli -- shell --server https://127.0.0.1:9090
 ```
 
-The token, channel ID, and admin ID are XOR-obfuscated in source — never in plaintext. The compiled binary does not reveal them via `strings` or static analysis. See [Security](#security) for details.
+Commands: `implants`, `interact <id>`, `tasks <id>`, `build`, `help`
 
-## Deploy
+Interactive shell (after `interact <id>`): `shell <cmd>`, `sleep <ms>`, `exit`, `creddump`, `upload <local> <remote>`, `download <remote>`, `exfil <path>`, `socks <port>`, `portfwd <lport> <rhost> <rport>`
 
-Build the `.exe` on your build machine, copy it to the target, run it as administrator. That's it.
+## Configuration
 
-**Deployment flow:**
+Edit `config/jebat.toml`:
 
-1. **Build** on your machine (see [Build](#build)) — produces one `.exe`
-2. **Copy** the `.exe` to the target machine (USB, network share, RDP copy — any method works; it's a single file with no installer and no dependencies)
-3. **Run as administrator** on the target — the scheduled task is created with SYSTEM privileges, which requires admin rights. If run without admin, the binary still works but persistence may not install.
-4. **Control** from your Discord channel — send commands to the control channel, the matching target executes and responds.
+```toml
+[server]
+api_bind = "127.0.0.1:9090"
+db_path = "jebat.db"
+log_level = "info"
+loot_dir = "loot"
 
-**First run behavior:**
-- Anti-analysis defenses run first — if a debugger or analysis tool (ProcmDump, Process Hacker, x64dbg, etc.) is detected, the binary exits silently with no output. Close the tool and run again.
-- If defenses pass, the binary installs persistence (scheduled task + registry run key), announces itself in the control channel, and starts polling.
+[[listeners]]
+protocol = "https"
+bind = "0.0.0.0"
+port = 443
+beacon_path = "/beacon"
+result_path = "/result"
+tls_cert = "config/cert.pem"
+tls_key = "config/key.pem"
+rc4_key = "aabbccddee112233"
 
-**On reboot:** the scheduled task restarts the binary automatically — no manual step needed.
+# [[listeners]]
+# protocol = "dns"
+# bind = "0.0.0.0"
+# port = 53
+# domain = "c2.example.com"
+# rc4_key = "aabbccddee112233"
 
-**Stop:** end the process in Task Manager. Persistence remains; the binary restarts at next logon. To fully remove, see [Cleanup](#cleanup).
-
-The binary is the persistence. Copy it, run it as admin, and it stays.
-
-## Commands
-
-| Command | What it does |
-|---------|-------------|
-| `!exec <name> <cmd>` | Run `<cmd>` on the target whose hostname matches `<name>` (uppercase). Result posted back. |
-| `!download <name> <path>` | Upload file at `<path>` from target `<name>` to the control channel (max 25 MB). |
-| `!pingall` | All targets respond with an alive message. |
-| `!screenshot` | Capture primary screen, upload as BMP file to the control channel. |
-| `!filesearch <pattern> [path]` | Search for files matching `<pattern>` (e.g. `*.docx`) under `[path]` (default: C:\). Up to 100 results. |
-| `!uninstall` | Remove persistence (scheduled task + registry run key). Binary stays on disk. |
-| `!selfdestruct` | Remove persistence + schedule binary deletion on next reboot. Exits immediately. |
-
-## Security
-
-### Built-in
-
-- **XOR-obfuscated credentials** — token, channel ID, admin ID as XOR byte arrays. Token is split into multiple arrays and the decode key is derived at runtime from separate constants. No plaintext in source or binary. Defends against `strings` and static disassembly.
-- **Anti-debug** — `IsDebuggerPresent` + `CheckRemoteDebuggerPresent` checked at startup AND before each token decode. Silent exit if attached.
-- **Anti-tool scan** — process list checked for ProcmDump, Process Hacker, x64dbg, Cheat Engine, WinDbg, IDA, dnSpy, and others. Silent exit if found.
-- **Per-request token decode** — token decoded into a short-lived buffer for each HTTP call, converted to string for the auth header, then wiped (3-pass). Plaintext token lifetime is bounded to the duration of each HTTP call, not the life of the process.
-- **CreateProcess via ctypes** — commands run with `CREATE_NO_WINDOW` flag, no visible console window.
-- **Polling jitter** — 4–6 second random sleep between polls instead of fixed 5-second interval, to avoid a machine-identifiable pattern.
-- **Persistence** — scheduled task (runs at user logon as SYSTEM) + HKCU Run key. Both use a generic task name chosen at build time. Survives reboots.
-
-## Cleanup
-
-Easy path — use the Discord commands:
-
-- **`!uninstall`** — removes persistence (scheduled task + registry). Binary stays on disk. Copy and run again to re-persist.
-- **`!selfdestruct`** — removes persistence and schedules the binary for deletion on next reboot. Exits immediately.
-
-Or just delete the `.exe` file. If persistence was installed, also remove it manually: delete the `WindowsSecurityCheck` scheduled task in Task Scheduler.
-
-### Check and clean persistence (copy-paste)
-
-Run this in PowerShell as the user who ran the binary. It checks for the scheduled task and registry entry, reports what it finds, and removes both if present:
-
-```powershell
-$taskName = "WindowsSecurityCheck"
-
-# Check scheduled task
-$task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-if ($task) {
-    Write-Host "[FOUND] Scheduled task: $taskName" -ForegroundColor Yellow
-    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
-    Write-Host "[REMOVED] Scheduled task: $taskName" -ForegroundColor Green
-} else {
-    Write-Host "[CLEAN] No scheduled task: $taskName" -ForegroundColor Gray
-}
-
-# Check registry run key
-$regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
-$regName = $taskName
-try {
-    $val = Get-ItemProperty -Path $regPath -Name $regName -ErrorAction Stop
-    Write-Host "[FOUND] Registry: $regPath\$regName = $val.$regName" -ForegroundColor Yellow
-    Remove-ItemProperty -Path $regPath -Name $regName -ErrorAction SilentlyContinue
-    Write-Host "[REMOVED] Registry: $regPath\$regName" -ForegroundColor Green
-} catch {
-    Write-Host "[CLEAN] No registry entry: $regPath\$regName" -ForegroundColor Gray
-}
-
-Write-Host "`nDone. If the binary is still on disk, delete it manually." -ForegroundColor White
+# [[listeners]]
+# protocol = "smb"
+# bind = "0.0.0.0"
+# port = 445
+# rc4_key = "aabbccddee112233"
 ```
 
-If the binary was run as administrator and the scheduled task was created for SYSTEM, run this in an **elevated** PowerShell (Run as administrator) to catch the SYSTEM-owned task.
+## Implant Profiles
 
-## Repository structure
+Pre-built profiles in `config/profiles/`:
+
+| Profile | Sleep | Protocol | Evasion | Use case |
+|---------|-------|----------|---------|----------|
+| `stealth` | 60s | HTTPS | Full (indirect syscalls, AMSI/ETW patch) | Long-haul access |
+| `noisy` | 5s | HTTPS | Minimal (AMSI only) | Quick results, lab |
+| `pivot` | 15s | SMB | Full | Internal lateral movement |
+
+## Repository Structure
 
 ```
-opss-terconnect/
-├── VALORANT.py          # Main bot (XOR config, anti-analysis, HTTP polling, persistence, commands)
-├── defenses.py          # Anti-debug / anti-dump helpers
-├── persistence.py       # Persistence, screenshot, file search, self-destruct
-├── token_gen.py         # CLI tool: generate XOR-obfuscated config
-├── requirements.txt     # nuitka (build tool only)
-├── .gitignore
-├── README.md
-├── images/
-│   ├── connected.png
-│   ├── ping.png
-│   ├── exec.png
-│   ├── download.png
-│   └── pwned.png
-└── valorant.ico
+jebat/
+├── server/                   Rust backend
+│   └── src/
+│       ├── main.rs           Entry point, config loading
+│       ├── config.rs         TOML config structs
+│       ├── state.rs          Shared app state
+│       ├── protocol/         Wire protocol (wire.rs, crypto.rs, tasks.rs)
+│       ├── listeners/        HTTPS, DNS, SMB listeners
+│       ├── core/             Implant registry, task queue, event bus, file store
+│       ├── storage/          SQLite schema + queries
+│       ├── api/              REST endpoints + WebSocket
+│       └── tests.rs          Protocol round-trip tests
+├── cli/                      Operator CLI
+│   └── src/
+│       ├── main.rs           CLI entry (clap)
+│       ├── client.rs         API client
+│       └── repl.rs           Interactive REPL
+├── web/                      React frontend
+│   └── src/
+│       ├── App.tsx           Layout + routing
+│       ├── pages/            Dashboard, Implants, Interact, Tasks, Files, Listeners, Login
+│       ├── components/       EventFeed
+│       └── lib/              API client, WebSocket, auth helpers
+├── config/
+│   ├── jebat.toml            Server config
+│   └── profiles/             Implant build profiles (stealth, noisy, pivot)
+├── Cargo.toml                Workspace root
+└── .gitignore
 ```
+
+## Wire Protocol
+
+Binary little-endian framing with RC4 encryption. Three message types:
+
+| Type | ID | Direction | Layout |
+|------|----|-----------|--------|
+| Checkin | `0x01` | Implant → Jebat | `[1B type] [16B agent_id] [4B hostname_len] [hostname] [4B sleep_ms]` |
+| Task List | `0x02` | Jebat → Implant | `[1B type] [4B count] per task: [4B id] [1B type] [4B data_len] [data]` |
+| Result | `0x03` | Implant → Jebat | `[1B type] [16B agent_id] [4B task_id] [1B success] [4B output_len] [output]` |
+
+11 task types: Nop (0), Shell (1), SleepChange (2), Exit (3), FileUpload (4), FileDownload (5), CredDump (6), LateralMove (7), Exfil (8), SocksConnect (9), PortForward (10).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT
 
 ---
 
-## ⚠️ Authorised testing and learning only
-
-This tool is for authorised security testing and learning. Do not use against systems you do not have permission to test.
-
-
+**Authorised testing and learning only.** Do not use against systems you do not have permission to test.
