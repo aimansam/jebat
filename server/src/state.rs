@@ -1,3 +1,4 @@
+use crate::core::events::EventBus;
 use crate::core::implants::ImplantRegistry;
 use crate::core::taskqueue::TaskQueue;
 use crate::storage::db::Database;
@@ -8,6 +9,7 @@ pub struct AppState {
     pub db: Arc<Database>,
     pub implants: Arc<ImplantRegistry>,
     pub tasks: Arc<TaskQueue>,
+    pub events: Arc<EventBus>,
 }
 
 impl AppState {
@@ -15,10 +17,12 @@ impl AppState {
         let db = Arc::new(db);
         let implants = Arc::new(ImplantRegistry::new(db.clone()));
         let tasks = Arc::new(TaskQueue::new(db.clone()));
+        let events = Arc::new(EventBus::new(256));
         Self {
             db,
             implants,
             tasks,
+            events,
         }
     }
 }

