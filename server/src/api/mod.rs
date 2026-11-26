@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod builder;
 pub mod files;
 pub mod implants;
 pub mod listeners;
@@ -19,6 +20,7 @@ pub fn build_api_router(state: AppState) -> Router {
 
     Router::new()
         .merge(auth::routes(state.clone()))
+        .merge(builder::routes(state.clone()))
         .merge(implants::routes(state.clone()))
         .merge(tasks::routes(state.clone()))
         .merge(listeners::routes(state.clone()))
