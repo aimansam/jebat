@@ -1,5 +1,23 @@
+# Rust
+/target/
+server/target/
+
+# Database
+*.db
+
+# TLS certs (generated locally)
+config/*.pem
+
+# Node (web UI)
+node_modules/
+web/dist/
+
+# Environment
 .env
+
+# Python (archived)
 /build/
 /.pyarmor/
 /dist/
 *.spec
+__pycache__/
