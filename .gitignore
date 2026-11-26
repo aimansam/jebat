@@ -4,6 +4,8 @@ server/target/
 
 # Database
 *.db
+*.db-shm
+*.db-wal
 
 # Loot storage
 loot/

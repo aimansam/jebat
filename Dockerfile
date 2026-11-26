@@ -1,4 +1,4 @@
-FROM rust:1.83-bookworm AS server-build
+FROM rust:latest AS server-build
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY server/ server/
@@ -12,7 +12,7 @@ RUN npm ci
 COPY web/ .
 RUN npm run build
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssl dnsutils && rm -rf /var/lib/apt/lists/*
 RUN useradd -m -s /bin/bash jebat
 WORKDIR /app
