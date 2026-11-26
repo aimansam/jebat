@@ -43,6 +43,14 @@ cd web && npm install && npm run build && cd ..
 
 Web UI at `https://127.0.0.1:9090` — login with `admin` / `admin`.
 
+### Docker
+
+```bash
+docker compose up -d
+```
+
+Ports: `9090` (API + web UI), `443` (HTTPS listener). Mount TLS certs in `config/`.
+
 ## Operator CLI
 
 ```bash
