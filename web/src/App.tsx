@@ -7,6 +7,7 @@ import Dashboard from "./pages/Dashboard";
 import Implants from "./pages/Implants";
 import Interact from "./pages/Interact";
 import Tasks from "./pages/Tasks";
+import Files from "./pages/Files";
 import Listeners from "./pages/Listeners";
 
 function App() {
@@ -31,6 +32,7 @@ function App() {
     { to: "/", label: "Dashboard" },
     { to: "/implants", label: "Implants" },
     { to: "/tasks", label: "Tasks" },
+    { to: "/files", label: "Files" },
     { to: "/listeners", label: "Listeners" },
   ];
 
@@ -71,6 +73,7 @@ function App() {
           <Route path="/implants" element={<Implants />} />
           <Route path="/implants/:id" element={<Interact />} />
           <Route path="/tasks" element={<Tasks />} />
+          <Route path="/files" element={<Files />} />
           <Route path="/listeners" element={<Listeners />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>

@@ -5,6 +5,9 @@ server/target/
 # Database
 *.db
 
+# Loot storage
+loot/
+
 # TLS certs (generated locally)
 config/*.pem
 

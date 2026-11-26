@@ -66,10 +66,22 @@ impl Database {
                 created_at  TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS loot (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id    BLOB(16) NOT NULL REFERENCES implants(agent_id),
+                loot_type   TEXT NOT NULL,
+                filename    TEXT NOT NULL,
+                disk_path   TEXT NOT NULL,
+                size_bytes  INTEGER NOT NULL DEFAULT 0,
+                created_at  TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_tasks_agent_status
                 ON tasks(agent_id, status);
             CREATE INDEX IF NOT EXISTS idx_events_created
-                ON events(created_at);",
+                ON events(created_at);
+            CREATE INDEX IF NOT EXISTS idx_loot_agent
+                ON loot(agent_id);",
         )?;
         Ok(())
     }
@@ -329,6 +341,113 @@ impl Database {
 
     // --- Events ---
 
+    // --- Loot ---
+
+    pub fn insert_loot(
+        &self,
+        agent_id: &[u8; 16],
+        loot_type: &str,
+        filename: &str,
+        disk_path: &str,
+        size_bytes: i64,
+    ) -> SqlResult<i64> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO loot (agent_id, loot_type, filename, disk_path, size_bytes, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![agent_id.as_slice(), loot_type, filename, disk_path, size_bytes, now],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn list_loot(&self) -> SqlResult<Vec<LootRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, agent_id, loot_type, filename, disk_path, size_bytes, created_at
+             FROM loot ORDER BY id DESC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                let id_blob: Vec<u8> = row.get(1)?;
+                let mut agent_id = [0u8; 16];
+                if id_blob.len() == 16 {
+                    agent_id.copy_from_slice(&id_blob);
+                }
+                Ok(LootRow {
+                    id: row.get(0)?,
+                    agent_id,
+                    loot_type: row.get(2)?,
+                    filename: row.get(3)?,
+                    disk_path: row.get(4)?,
+                    size_bytes: row.get(5)?,
+                    created_at: row.get(6)?,
+                })
+            })?
+            .collect::<SqlResult<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn list_loot_for_implant(&self, agent_id: &[u8; 16]) -> SqlResult<Vec<LootRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, agent_id, loot_type, filename, disk_path, size_bytes, created_at
+             FROM loot WHERE agent_id = ?1 ORDER BY id DESC",
+        )?;
+        let rows = stmt
+            .query_map(params![agent_id.as_slice()], |row| {
+                let id_blob: Vec<u8> = row.get(1)?;
+                let mut agent_id = [0u8; 16];
+                if id_blob.len() == 16 {
+                    agent_id.copy_from_slice(&id_blob);
+                }
+                Ok(LootRow {
+                    id: row.get(0)?,
+                    agent_id,
+                    loot_type: row.get(2)?,
+                    filename: row.get(3)?,
+                    disk_path: row.get(4)?,
+                    size_bytes: row.get(5)?,
+                    created_at: row.get(6)?,
+                })
+            })?
+            .collect::<SqlResult<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn get_loot(&self, loot_id: i64) -> SqlResult<Option<LootRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, agent_id, loot_type, filename, disk_path, size_bytes, created_at
+             FROM loot WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![loot_id], |row| {
+            let id_blob: Vec<u8> = row.get(1)?;
+            let mut agent_id = [0u8; 16];
+            if id_blob.len() == 16 {
+                agent_id.copy_from_slice(&id_blob);
+            }
+            Ok(LootRow {
+                id: row.get(0)?,
+                agent_id,
+                loot_type: row.get(2)?,
+                filename: row.get(3)?,
+                disk_path: row.get(4)?,
+                size_bytes: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?;
+        rows.next().transpose()
+    }
+
+    pub fn delete_loot(&self, loot_id: i64) -> SqlResult<bool> {
+        let conn = self.conn.lock().unwrap();
+        let changed = conn.execute("DELETE FROM loot WHERE id = ?1", params![loot_id])?;
+        Ok(changed > 0)
+    }
+
+    // --- Events ---
+
     pub fn log_event(
         &self,
         event_type: &str,
@@ -373,6 +492,17 @@ pub struct TaskRow {
     pub id: i64,
     pub task_type: u8,
     pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LootRow {
+    pub id: i64,
+    pub agent_id: [u8; 16],
+    pub loot_type: String,
+    pub filename: String,
+    pub disk_path: String,
+    pub size_bytes: i64,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone)]

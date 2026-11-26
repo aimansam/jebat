@@ -57,7 +57,8 @@ async fn main() {
             });
             info!("database opened at {}", db_path.display());
 
-            let app_state = state::AppState::new(db);
+            let loot_dir = PathBuf::from(&cfg.server.loot_dir);
+            let app_state = state::AppState::new(db, &loot_dir);
 
             for listener_cfg in &cfg.listeners {
                 let s = app_state.clone();

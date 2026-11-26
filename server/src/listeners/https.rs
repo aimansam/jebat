@@ -159,6 +159,17 @@ async fn handle_result(
         }
     }
 
+    if result.success && !result.output.is_empty() {
+        if let Ok(Some(task)) = state.app.db.get_task(result.task_id as i64) {
+            if matches!(task.task_type, 4 | 5 | 6) {
+                let _ = state
+                    .app
+                    .files
+                    .store_task_output(&result.agent_id, task.task_type, &result.output);
+            }
+        }
+    }
+
     let _ = state.app.db.log_event(
         "task_complete",
         Some(&result.agent_id),

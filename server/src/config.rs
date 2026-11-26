@@ -14,6 +14,12 @@ pub struct ServerConfig {
     pub db_path: String,
     #[serde(default = "default_log_level")]
     pub log_level: String,
+    #[serde(default = "default_loot_dir")]
+    pub loot_dir: String,
+}
+
+fn default_loot_dir() -> String {
+    "loot".into()
 }
 
 fn default_log_level() -> String {
